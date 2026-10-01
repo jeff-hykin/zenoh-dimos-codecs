@@ -8,7 +8,7 @@ repository = "https://github.com/jeff-hykin/zenoh-dimos-codecs"
 publish = false
 
 [dependencies]
-zenoh-web = { git = "https://github.com/jeff-hykin/zenoh-web", rev = "0a36decdf4541a130f55853a1ca8ca3afe363ad8" }
+zenoh-web = { git = "https://github.com/jeff-hykin/zenoh-web", rev = "1aa39731af8b4f6599ee3ef0d00e81106d9cd502" }
 anyhow = "1"
 # pure Rust decoders; zstd builds its C sources
 zstd = "0.13"
