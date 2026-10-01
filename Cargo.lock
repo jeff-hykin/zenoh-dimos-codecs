@@ -5212,7 +5212,7 @@ dependencies = [
 [[package]]
 name = "zenoh-web"
 version = "0.3.0"
-source = "git+https://github.com/jeff-hykin/zenoh-web?rev=f6f9de2c5e3a069b871389460db3c33d88fcafa7#f6f9de2c5e3a069b871389460db3c33d88fcafa7"
+source = "git+https://github.com/jeff-hykin/zenoh-web?rev=0cdee77e81dcbe87e70b8524a7413ce7470b7de3#0cdee77e81dcbe87e70b8524a7413ce7470b7de3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5220,10 +5220,12 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures",
+ "hmac",
  "log",
  "openh264",
  "serde",
  "serde_json",
+ "sha1",
  "tokio",
  "tower-http",
  "unsafe-libopus",

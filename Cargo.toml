@@ -11,7 +11,7 @@ readme = "README.md"
 include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/LICENSE"]
 
 [dependencies]
-zenoh-web = { version = "0.3.0", git = "https://github.com/jeff-hykin/zenoh-web", rev = "f6f9de2c5e3a069b871389460db3c33d88fcafa7" }
+zenoh-web = { version = "0.3.0", git = "https://github.com/jeff-hykin/zenoh-web", rev = "0cdee77e81dcbe87e70b8524a7413ce7470b7de3" }
 anyhow = "1"
 # pure Rust decoders
 zune-jpeg = "0.5"
