@@ -112,18 +112,6 @@ impl Codec for Builtin {
             Input::Image | Input::CompressedImage => payload_bytes * 0.05,
         }
     }
-
-    fn jpeg<'a>(&self, sample: &CodecSample<'a>) -> Option<&'a [u8]> {
-        let data = match self.input {
-            Input::Image => {
-                let image = wire::parse_image(self.protocol, sample.payload).ok()?;
-                matches!(image.encoding.to_ascii_lowercase().as_str(), "jpeg" | "jpg").then_some(image.data)?
-            }
-            Input::CompressedImage => wire::parse_compressed_image(self.protocol, sample.payload).ok()?.data,
-            _ => return None,
-        };
-        (image::sniff_format(data, "").ok()? == image::FileFormat::Jpeg).then_some(data)
-    }
 }
 
 #[cfg(test)]
@@ -156,24 +144,5 @@ mod tests {
         let encoding = zenoh_web::zenoh::bytes::Encoding::default();
         let DecodedFrame::Video(image) = codec.decode(&CodecSample::new("k", &payload, &encoding)).unwrap() else { panic!("video expected") };
         assert_eq!((image.width(), image.height()), (320, 240));
-    }
-
-    #[test]
-    fn hands_over_jpeg_sources_for_pass_through() {
-        let encoding = zenoh_web::zenoh::bytes::Encoding::default();
-        let jpeg_of = |name: &str, file: &str| {
-            let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
-            let payload = fixture(file);
-            codec.jpeg(&CodecSample::new("k", &payload, &encoding)).map(<[u8]>::to_vec)
-        };
-        for (name, file) in [("dimos-compressed-image", "dimos/compressed_jpeg.bin"), ("ros2-compressed-image", "ros2/compressed_jpeg.cdr"), ("dimos-image", "dimos/image_jpeg_in_Image.bin")] {
-            let jpeg = jpeg_of(name, file).unwrap_or_else(|| panic!("{file}: a JPEG source"));
-            assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]));
-            let picture = image::compressed_to_rgb(&jpeg, "").unwrap();
-            assert_eq!((picture.width, picture.height), (320, 240), "{file}");
-        }
-        for (name, file) in [("dimos-compressed-image", "dimos/compressed_png.bin"), ("dimos-image", "dimos/image_rgb8.bin"), ("dimos-depth", "dimos/depth_16UC1.bin")] {
-            assert!(jpeg_of(name, file).is_none(), "{file}: not a JPEG");
-        }
     }
 }

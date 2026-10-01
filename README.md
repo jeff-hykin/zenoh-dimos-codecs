@@ -1,7 +1,7 @@
 # zenoh-dimos-codecs
 
 [zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2 (rmw_zenoh) and dimos sensor
-messages: images as H.264 video (or JPEG files), lossless depth and quantized point clouds. A Rust
+messages: images as H.264 video, lossless depth and quantized point clouds. A Rust
 crate of `zenoh_web::Codec`s plus their browser decoders (`client/dimos_codecs.ts`). The
 `zenoh-web` command ([zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)) has them all.
 
@@ -39,9 +39,6 @@ Named `<protocol>-<input type>`; the input type decides the output:
 | `ros2-depth`, `dimos-depth` | `sensor_msgs/Image`: 16UC1, 32FC1, mono16 | lossless depth: `msg.decoded` is a `DepthImage` |
 | `ros2-compressed-depth`, `dimos-compressed-depth` | `sensor_msgs/CompressedImage`: 16-bit gray png or jxl, ROS `compressedDepth` png (12-byte header skipped; its quantized 32FC1 form is refused) | lossless depth |
 | `ros2-pointcloud2`, `dimos-pointcloud2` | `sensor_msgs/PointCloud2`, any field layout | quantized points: `msg.decoded` is a `PointCloud` |
-
-The image codecs also send JPEG files (zenoh-web's `imageTransport: "jpeg"`); a JPEG source passes
-through untouched at full quality.
 
 Inputs:
 - ROS 2 over rmw_zenoh: key `<domain>/<topic>/<pkg>::msg::dds_::<Type>_/RIHS01_<hash>`, payload CDR with
