@@ -5,10 +5,13 @@ edition = "2024"
 rust-version = "1.88"
 description = "zenoh-web codecs for ROS 2 and dimos images, depth and point clouds"
 repository = "https://github.com/jeff-hykin/zenoh-dimos-codecs"
-publish = false
+license-file = "LICENSE"
+readme = "README.md"
+# only what building the library needs (no test fixtures)
+include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/LICENSE"]
 
 [dependencies]
-zenoh-web = { git = "https://github.com/jeff-hykin/zenoh-web", rev = "f6f9de2c5e3a069b871389460db3c33d88fcafa7" }
+zenoh-web = { version = "0.3.0", git = "https://github.com/jeff-hykin/zenoh-web", rev = "f6f9de2c5e3a069b871389460db3c33d88fcafa7" }
 anyhow = "1"
 # pure Rust decoders
 zune-jpeg = "0.5"
