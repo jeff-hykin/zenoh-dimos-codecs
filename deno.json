@@ -1,5 +1,0 @@
-{
-    "tasks": {
-        "check": "deno check client/dimos_codecs.ts"
-    }
-}

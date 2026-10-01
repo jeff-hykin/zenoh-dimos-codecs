@@ -1,10 +1,8 @@
-//! PointCloud2 to a compact data-channel format: optional thinning (keep every Nth point), xyz
-//! quantized to int16 around a per-message origin, optional u8 intensity, zstd.
-//!
-//! Wire format (little endian), see SPEC "Wire formats":
-//! `u8 version=2 | u8 flags (bit0 intensity) | u16 reserved | u32 pointCount | u32 sourcePointCount |
-//!  f32 originX | f32 originY | f32 originZ | f32 scale | u32 keepEvery | f32 intensityMin |
-//!  f32 intensityScale | zstd(i16 x,y,z per point, then u8 intensity per point if flagged)`
+//! PointCloud2 to compact zenoh-web fields (zstd-compressed by the bridge by default): optional
+//! thinning (keep every Nth point), xyz quantized to int16 around a per-message origin, optional u8
+//! intensity. Fields, see README "Wire formats": `version=3`, `count`, `sourceCount`, `origin` (f32 × 3),
+//! `scale`, `keepEvery`, `maxError`, `positions` (scaled i16 x, y, z), `intensity` (u8, if the cloud
+//! has it), `intensityMin`, `intensityScale`.
 //!
 //! Decoded `x = originX + qx * scale`. The error per axis of each sent point is at most `scale / 2`,
 //! where `scale = (largest bounding-box extent / 2) / 32767` (plus f32 rounding, ~1e-7 relative), in
@@ -14,9 +12,9 @@
 use crate::wire::{PointCloud, PointField};
 use anyhow::{Context, Result, bail, ensure};
 use std::borrow::Cow;
+use zenoh_web::Fields;
 
-pub const HEADER_LEN: usize = 40;
-const ZSTD_LEVEL: i32 = 3;
+pub const VERSION: u8 = 3;
 /// Thinning at quality 0: keep 1 point in this many.
 pub const MAX_KEEP_EVERY: u32 = 16;
 const QUANT_MAX: f64 = 32767.0;
@@ -123,10 +121,10 @@ fn quantization_grid(low: [f64; 3], high: [f64; 3]) -> ([f64; 3], f64) {
 
 #[cfg(test)]
 pub fn encode(cloud: &PointCloud, quality: f64) -> Result<Vec<u8>> {
-    encode_points(&read_points(cloud)?, quality)
+    Ok(encode_points(&read_points(cloud)?, quality))
 }
 
-pub fn encode_points(cloud: &Points, quality: f64) -> Result<Vec<u8>> {
+pub fn encode_points(cloud: &Points, quality: f64) -> Vec<u8> {
     let has_intensity = cloud.has_intensity;
     let source_count = cloud.points.len();
     let keep_every = keep_every(quality);
@@ -148,31 +146,26 @@ pub fn encode_points(cloud: &Points, quality: f64) -> Result<Vec<u8>> {
     let intensity_scale = if intensity_high > intensity_low { ((intensity_high - intensity_low) / 255.0) as f32 } else { 1.0 };
     let intensity_min = if points.is_empty() { 0.0 } else { intensity_low as f32 };
 
-    let mut body = Vec::with_capacity(points.len() * if has_intensity { 7 } else { 6 });
-    for point in points.iter() {
-        for (value, axis_origin) in point.xyz.iter().zip(origin) {
-            let quantized = ((value - axis_origin as f64) / scale as f64).round().clamp(-QUANT_MAX, QUANT_MAX) as i16;
-            body.extend_from_slice(&quantized.to_le_bytes());
-        }
+    let quantized: Vec<i16> = points
+        .iter()
+        .flat_map(|point| point.xyz.into_iter().zip(origin).map(|(value, axis_origin)| ((value - axis_origin as f64) / scale as f64).round().clamp(-QUANT_MAX, QUANT_MAX) as i16))
+        .collect();
+    let fields = Fields::new()
+        .scalar("version", VERSION)
+        .scalar("count", points.len() as u32)
+        .scalar("sourceCount", source_count as u32)
+        .vectors("origin", 3, &origin)
+        .scalar("scale", scale)
+        .scalar("keepEvery", keep_every)
+        .scalar("maxError", scale / 2.0)
+        .scaled("positions", &origin.map(f64::from), &[scale as f64; 3], &quantized)
+        .scalar("intensityMin", intensity_min)
+        .scalar("intensityScale", intensity_scale);
+    if !has_intensity {
+        return fields.build();
     }
-    if has_intensity {
-        body.extend(points.iter().map(|point| ((point.intensity - intensity_min as f64) / intensity_scale as f64).round().clamp(0.0, 255.0) as u8));
-    }
-    let mut out = Vec::with_capacity(HEADER_LEN + body.len() / 2);
-    out.push(2);
-    out.push(has_intensity as u8);
-    out.extend_from_slice(&[0, 0]);
-    out.extend_from_slice(&(points.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(source_count as u32).to_le_bytes());
-    for value in [origin[0], origin[1], origin[2], scale] {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out.extend_from_slice(&keep_every.to_le_bytes());
-    for value in [intensity_min, intensity_scale] {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out.extend_from_slice(&zstd::bulk::compress(&body, ZSTD_LEVEL)?);
-    Ok(out)
+    let intensity: Vec<u8> = points.iter().map(|point| ((point.intensity - intensity_min as f64) / intensity_scale as f64).round().clamp(0.0, 255.0) as u8).collect();
+    fields.array("intensity", &intensity).build()
 }
 
 #[cfg(test)]
@@ -180,16 +173,13 @@ mod tests {
     use super::*;
     use crate::wire::{Protocol, parse_point_cloud, tests::fixture};
 
+    /// (positions as the client computes them, intensity, scale)
     fn decode(bytes: &[u8]) -> (Vec<[f32; 3]>, Option<Vec<u8>>, f32) {
-        let f32_at = |offset: usize| f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-        let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
-        let (origin, scale) = ([f32_at(12), f32_at(16), f32_at(20)], f32_at(24));
-        let body = zstd::bulk::decompress(&bytes[HEADER_LEN..], 1 << 24).unwrap();
-        let positions = (0..count)
-            .map(|index| std::array::from_fn(|axis| origin[axis] + i16::from_le_bytes([body[index * 6 + axis * 2], body[index * 6 + axis * 2 + 1]]) as f32 * scale))
-            .collect();
-        let intensity = (bytes[1] & 1 == 1).then(|| body[count * 6..].to_vec());
-        (positions, intensity, scale)
+        let fields = zenoh_web::fields::parse(bytes).unwrap();
+        assert_eq!(fields["version"].values(), [VERSION as f64]);
+        let positions = fields["positions"].values().as_chunks::<3>().0.iter().map(|xyz| xyz.map(|value| value as f32)).collect();
+        let intensity = fields.get("intensity").map(|field| field.data.clone());
+        (positions, intensity, fields["scale"].values()[0] as f32)
     }
 
     #[test]
@@ -215,7 +205,7 @@ mod tests {
 
     #[test]
     fn lower_quality_is_smaller() {
-        // a scan-like cloud with noise (the grid fixtures compress so well that thinning them can grow the output)
+        // a scan-like cloud with noise
         let mut seed = 1u64;
         let mut noise = move || {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -223,9 +213,9 @@ mod tests {
         };
         let points = (0..20000).map(|index| Point { xyz: [index as f64 * 0.001 + noise(), noise() * 5.0, noise()], intensity: 0.0 }).collect();
         let cloud = Points { points, has_intensity: false };
-        let [full, half, lowest] = [1.0, 0.5, 0.0].map(|quality| encode_points(&cloud, quality).unwrap());
+        let [full, half, lowest] = [1.0, 0.5, 0.0].map(|quality| encode_points(&cloud, quality));
         assert!(half.len() * 4 < full.len() * 3 && lowest.len() < half.len(), "{} / {} / {}", full.len(), half.len(), lowest.len());
-        assert_eq!(u32::from_le_bytes(half[4..8].try_into().unwrap()), 10000);
+        assert_eq!(zenoh_web::fields::parse(&encode_points(&cloud, 0.5)).unwrap()["count"].values(), [10000.0]);
     }
 
     #[test]
@@ -240,7 +230,7 @@ mod tests {
         let cloud = parse_point_cloud(Protocol::Ros2, &payload).unwrap();
         for (quality, keep) in [(0.5, 2usize), (1.0 / 3.0, 3)] {
             let encoded = encode(&cloud, quality).unwrap();
-            assert_eq!(u32::from_le_bytes(encoded[28..32].try_into().unwrap()) as usize, keep);
+            assert_eq!(zenoh_web::fields::parse(&encoded).unwrap()["keepEvery"].values(), [keep as f64]);
             let (positions, _, scale) = decode(&encoded);
             assert_eq!(positions.len(), 20000usize.div_ceil(keep));
             for (sent, position) in positions.iter().enumerate() {
@@ -260,7 +250,7 @@ mod tests {
         for unit in [1e-3, 1.0, 1e3] {
             let cloud = Points { points: points.iter().map(|point| Point { xyz: point.xyz.map(|value| value * unit), intensity: 0.0 }).collect(), has_intensity: false };
             for quality in [1.0, 0.5, 0.0] {
-                let (positions, _, scale) = decode(&encode_points(&cloud, quality).unwrap());
+                let (positions, _, scale) = decode(&encode_points(&cloud, quality));
                 let keep = keep_every(quality) as usize;
                 assert_eq!(positions.len(), 5000usize.div_ceil(keep), "unit {unit} q {quality}");
                 for (sent, position) in positions.iter().enumerate() {

@@ -2,8 +2,9 @@
 
 [zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2 (rmw_zenoh) and dimos sensor
 messages: images as H.264 video, lossless depth and quantized point clouds. A Rust
-crate of `zenoh_web::Codec`s plus their browser decoders (`client/dimos_codecs.ts`). The
-`zenoh-web` command ([zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)) has them all.
+crate of `zenoh_web::Codec`s and nothing else: depth and point clouds are zenoh-web **fields**, which
+zenoh-web's own browser client decodes, so pages need no code from here. The `zenoh-web` command
+([zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)) has them all.
 
 ```toml
 [dependencies]
@@ -18,15 +19,11 @@ for codec in zenoh_dimos_codecs::all() {
 ```
 
 ```js
-import { connect, registerCodec } from "https://esm.sh/gh/jeff-hykin/zenoh-web@<commit>/client/zenoh_web.ts"
-import { registerDimosCodecs } from "https://esm.sh/gh/jeff-hykin/zenoh-dimos-codecs@<commit>/client/dimos_codecs.ts"
-registerDimosCodecs(registerCodec)   // depth and point cloud messages get msg.decoded
+import { connect } from "https://esm.sh/gh/jeff-hykin/zenoh-web@<commit>/client/zenoh_web.ts"
 const z = await connect("http://robot.local:7448")
+z.codecs   // [{ name: "dimos-depth", output: "fields" }, { name: "dimos-image", output: "video" }, ...]
 z.subscribe("dimos/camera/depth/sensor_msgs.Image", { codec: "dimos-depth" }, (msg) => draw(msg.decoded))
 ```
-
-Also exported: `CODECS` (the names), `codecOutput(codec)` (`"video"`, `"depth"` or `"pointcloud"`),
-`decodeDepth(bytes)`, `decodePointCloud(bytes)`, and the `DepthImage` / `PointCloud` types.
 
 ## Codecs
 
@@ -36,9 +33,9 @@ Named `<protocol>-<input type>`; the input type decides the output:
 |---|---|---|
 | `ros2-image`, `dimos-image` | `sensor_msgs/Image`: rgb8, bgr8, rgba8, bgra8, mono8, mono16/16UC1 (top 8 bits), or `jpeg`/`png` data in an Image (dimos' jpeg-encoded Image) | H.264 video track (`sub.mediaStream`) |
 | `ros2-compressed-image`, `dimos-compressed-image` | `sensor_msgs/CompressedImage`: jpeg, png, webp, jxl (magic bytes first, `format` string second) | H.264 video track |
-| `ros2-depth`, `dimos-depth` | `sensor_msgs/Image`: 16UC1, 32FC1, mono16 | lossless depth: `msg.decoded` is a `DepthImage` |
+| `ros2-depth`, `dimos-depth` | `sensor_msgs/Image`: 16UC1, 32FC1, mono16 | lossless depth: `msg.decoded` is a depth image (below) |
 | `ros2-compressed-depth`, `dimos-compressed-depth` | `sensor_msgs/CompressedImage`: 16-bit gray png or jxl, ROS `compressedDepth` png (12-byte header skipped; its quantized 32FC1 form is refused) | lossless depth |
-| `ros2-pointcloud2`, `dimos-pointcloud2` | `sensor_msgs/PointCloud2`, any field layout | quantized points: `msg.decoded` is a `PointCloud` |
+| `ros2-pointcloud2`, `dimos-pointcloud2` | `sensor_msgs/PointCloud2`, any field layout | quantized points: `msg.decoded` is a point cloud (below) |
 
 Inputs:
 - ROS 2 over rmw_zenoh: key `<domain>/<topic>/<pkg>::msg::dds_::<Type>_/RIHS01_<hash>`, payload CDR with
@@ -48,7 +45,7 @@ Inputs:
   wrong type is an error, counted in zenoh-web's `codecErrors` / `lastCodecError` stats).
 - mono16 is ambiguous (IR intensity or depth-like); the subscriber decides: `*-image` shows its top
   8 bits as gray video, `*-depth` delivers it losslessly with encoding `mono16`.
-- Decoders are pure Rust (zune-jpeg, png, image-webp, jxl-oxide), compression zstd. A YCbCr JPEG with
+- Decoders are pure Rust (zune-jpeg, png, image-webp, jxl-oxide). A YCbCr JPEG with
   even sides decodes straight to I420 (full range → BT.601 limited), never through RGB; everything
   else decodes to RGB8.
 
@@ -67,20 +64,20 @@ u8 over the message's min..max (`intensityMin`, `intensityScale`). `positions` i
 
 ## Wire formats
 
-Little endian; the browser decodes zstd with vendored fzstd (`client/vendor/`), since
-`DecompressionStream("zstd")` isn't in every browser yet.
+Both are zenoh-web fields messages (zenoh-web SPEC "Fields"), zstd-compressed by default
+(`Codec::default_compress`; a subscription's `compress: "none"` turns it off). The client decodes them
+into `msg.decoded`:
 
-- depth: `u8 version=1 | u8 encoding (1 16UC1, 2 32FC1, 3 mono16) | u16 stride | u32 width |
-  u32 height | u32 sourceWidth | u32 sourceHeight | zstd(width × height values)`
-- point cloud: `u8 version=2 | u8 flags (bit0 intensity) | u16 0 | u32 pointCount | u32 sourcePointCount |
-  f32 originX | f32 originY | f32 originZ | f32 scale | u32 keepEvery | f32 intensityMin |
-  f32 intensityScale | zstd(i16 x, y, z per point, then u8 intensity per point if flagged)`
+- depth (`version` 2): `{ version, encoding: "16UC1" | "32FC1" | "mono16", stride, width, height,
+  sourceWidth, sourceHeight, data }`; `data` is width × height values, row-major.
+- point cloud (`version` 3): `{ version, count, sourceCount, origin (Float32Array of 3), scale, keepEvery,
+  maxError, positions (Float32Array, x, y, z per point, sent as int16 scaled by origin and scale),
+  intensity (Uint8Array, only if the cloud has intensity), intensityMin, intensityScale }`.
 
 ## Tests
 
 ```sh
 cargo test && cargo clippy --all-targets   # parsers, decoders, encoders against test/fixtures
-deno task check                            # type-check the browser decoders
 ```
 
 `test/fixtures/` holds one payload per message (made by dimos's own encoder and by rosbags;

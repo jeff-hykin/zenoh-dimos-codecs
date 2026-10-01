@@ -1,14 +1,12 @@
-//! Lossless depth on a data channel: nearest-neighbor downscale (never interpolated) + zstd.
-//!
-//! Wire format (little endian), see SPEC "Wire formats":
-//! `u8 version=1 | u8 encoding (1 16UC1, 2 32FC1, 3 mono16) | u16 stride | u32 width | u32 height |
-//!  u32 sourceWidth | u32 sourceHeight | zstd(width*height values, u16 or f32 LE)`
+//! Lossless depth on a data channel: nearest-neighbor downscale (never interpolated), as zenoh-web
+//! fields (zstd-compressed by the bridge by default), see README "Wire formats":
+//! `version=2`, `encoding` ("16UC1", "32FC1" or "mono16"), `stride`, `width`, `height`, `sourceWidth`,
+//! `sourceHeight`, `data` (width × height u16 or f32, row-major).
 
-use crate::image::{Depth, DepthValues};
-use anyhow::Result;
+use crate::image::{Depth, DepthEncoding, DepthValues};
+use zenoh_web::Fields;
 
-pub const HEADER_LEN: usize = 20;
-const ZSTD_LEVEL: i32 = 3;
+pub const VERSION: u8 = 2;
 
 /// Integer downscale factor for a quality: 1 at quality 1, up to 8 at quality 0.
 pub fn stride(quality: f64) -> u32 {
@@ -21,43 +19,37 @@ pub fn size_factor(quality: f64) -> f64 {
     1.0 / (stride(quality) as f64).powi(2)
 }
 
-pub fn encode(depth: &Depth, quality: f64) -> Result<Vec<u8>> {
+pub fn encode(depth: &Depth, quality: f64) -> Vec<u8> {
     let stride = stride(quality);
     let width = depth.width.div_ceil(stride);
     let height = depth.height.div_ceil(stride);
-    let mut raw = Vec::with_capacity(width as usize * height as usize * 4);
-    let source_index = |x: u32, y: u32| (y * stride) as usize * depth.width as usize + (x * stride) as usize;
+    // every stride-th pixel of every stride-th row
+    fn sample<T: Copy>(values: &[T], source_width: u32, (width, height, stride): (u32, u32, u32)) -> Vec<T> {
+        (0..height).flat_map(|y| (0..width).map(move |x| values[(y * stride) as usize * source_width as usize + (x * stride) as usize])).collect()
+    }
+    let encoding = match depth.encoding {
+        DepthEncoding::U16 => "16UC1",
+        DepthEncoding::F32 => "32FC1",
+        DepthEncoding::Mono16 => "mono16",
+    };
+    let fields = Fields::new()
+        .scalar("version", VERSION)
+        .text("encoding", encoding)
+        .scalar("stride", stride)
+        .scalar("width", width)
+        .scalar("height", height)
+        .scalar("sourceWidth", depth.width)
+        .scalar("sourceHeight", depth.height);
     match &depth.values {
-        DepthValues::U16(values) => {
-            for y in 0..height {
-                for x in 0..width {
-                    raw.extend_from_slice(&values[source_index(x, y)].to_le_bytes());
-                }
-            }
-        }
-        DepthValues::F32(values) => {
-            for y in 0..height {
-                for x in 0..width {
-                    raw.extend_from_slice(&values[source_index(x, y)].to_le_bytes());
-                }
-            }
-        }
+        DepthValues::U16(values) => fields.array("data", &sample(values, depth.width, (width, height, stride))),
+        DepthValues::F32(values) => fields.array("data", &sample(values, depth.width, (width, height, stride))),
     }
-    let mut out = Vec::with_capacity(HEADER_LEN + raw.len() / 2);
-    out.push(1);
-    out.push(depth.encoding as u8);
-    out.extend_from_slice(&(stride as u16).to_le_bytes());
-    for value in [width, height, depth.width, depth.height] {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out.extend_from_slice(&zstd::bulk::compress(&raw, ZSTD_LEVEL)?);
-    Ok(out)
+    .build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::DepthEncoding;
 
     #[test]
     fn strides() {
@@ -70,16 +62,14 @@ mod tests {
     fn full_quality_round_trips_and_downscale_is_nearest() {
         let values: Vec<u16> = (0..12u16).collect();
         let depth = Depth { width: 4, height: 3, encoding: DepthEncoding::U16, values: DepthValues::U16(values.clone()) };
-        let full = encode(&depth, 1.0).unwrap();
-        assert_eq!(&full[..4], &[1, 1, 1, 0]);
-        let decoded = zstd::bulk::decompress(&full[HEADER_LEN..], 1 << 20).unwrap();
-        let decoded: Vec<u16> = decoded.as_chunks::<2>().0.iter().map(|&b| u16::from_le_bytes(b)).collect();
-        assert_eq!(decoded, values);
-        let half = encode(&depth, 0.5).unwrap();
-        assert_eq!(u32::from_le_bytes(half[4..8].try_into().unwrap()), 2);
-        assert_eq!(u32::from_le_bytes(half[8..12].try_into().unwrap()), 2);
-        let decoded = zstd::bulk::decompress(&half[HEADER_LEN..], 1 << 20).unwrap();
-        let decoded: Vec<u16> = decoded.as_chunks::<2>().0.iter().map(|&b| u16::from_le_bytes(b)).collect();
-        assert_eq!(decoded, vec![0, 2, 8, 10], "every value is a source value, never a blend");
+        let full = zenoh_web::fields::parse(&encode(&depth, 1.0)).unwrap();
+        assert_eq!((full["version"].values(), full["encoding"].text(), full["stride"].values()), (vec![2.0], Some("16UC1"), vec![1.0]));
+        assert_eq!(full["data"].values(), values.iter().map(|&value| value as f64).collect::<Vec<_>>());
+        let half = zenoh_web::fields::parse(&encode(&depth, 0.5)).unwrap();
+        assert_eq!((half["width"].values(), half["height"].values(), half["sourceWidth"].values()), (vec![2.0], vec![2.0], vec![4.0]));
+        assert_eq!(half["data"].values(), [0.0, 2.0, 8.0, 10.0], "every value is a source value, never a blend");
+        let floats = Depth { width: 2, height: 1, encoding: DepthEncoding::F32, values: DepthValues::F32(vec![1.5, f32::NAN]) };
+        let floats = zenoh_web::fields::parse(&encode(&floats, 1.0)).unwrap();
+        assert_eq!((floats["encoding"].text(), floats["data"].dtype), (Some("32FC1"), zenoh_web::fields::Dtype::F32));
     }
 }

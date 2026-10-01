@@ -15,10 +15,11 @@
 //!
 //! The input type decides the output:
 //! - `*-image`, `*-compressed-image`: color/mono images, H.264 on a WebRTC video track
-//! - `*-depth`, `*-compressed-depth`: lossless depth (u16/f32) on the data channel, zstd
-//! - `*-pointcloud2`: thinned (every Nth point) + int16 quantized points on the data channel, zstd
+//! - `*-depth`, `*-compressed-depth`: lossless depth (u16/f32) as zenoh-web fields
+//! - `*-pointcloud2`: thinned (every Nth point) + int16 quantized points as zenoh-web fields
 //!
-//! The browser decoders for the data codecs are `client/dimos_codecs.ts` in the repository.
+//! Depth and point clouds are zstd-compressed by default ([`Codec::default_compress`]); zenoh-web's
+//! client decodes them into `msg.decoded` with no codec code in the page.
 
 mod depth;
 mod image;
@@ -28,7 +29,7 @@ mod wire;
 use anyhow::Result;
 use std::sync::Arc;
 use wire::Protocol;
-use zenoh_web::{Codec, CodecOutput, CodecSample, DecodedFrame};
+use zenoh_web::{Codec, CodecOutput, CodecSample, Compress, DecodedFrame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Input {
@@ -72,7 +73,14 @@ impl Codec for Builtin {
     fn output(&self) -> CodecOutput {
         match self.input {
             Input::Image | Input::CompressedImage => CodecOutput::Video,
-            Input::Depth | Input::CompressedDepth | Input::PointCloud2 => CodecOutput::Data,
+            Input::Depth | Input::CompressedDepth | Input::PointCloud2 => CodecOutput::Fields,
+        }
+    }
+
+    fn default_compress(&self) -> Compress {
+        match self.output() {
+            CodecOutput::Video => Compress::None,
+            _ => Compress::Zstd,
         }
     }
 
@@ -95,8 +103,8 @@ impl Codec for Builtin {
 
     fn encode(&self, frame: &DecodedFrame, quality: f64) -> Result<Vec<u8>> {
         match self.input {
-            Input::Depth | Input::CompressedDepth => depth::encode(frame.downcast::<image::Depth>()?, quality),
-            Input::PointCloud2 => pointcloud::encode_points(frame.downcast::<pointcloud::Points>()?, quality),
+            Input::Depth | Input::CompressedDepth => Ok(depth::encode(frame.downcast::<image::Depth>()?, quality)),
+            Input::PointCloud2 => Ok(pointcloud::encode_points(frame.downcast::<pointcloud::Points>()?, quality)),
             Input::Image | Input::CompressedImage => anyhow::bail!("{} is a video codec", self.name),
         }
     }
@@ -104,7 +112,7 @@ impl Codec for Builtin {
     fn estimated_bytes(&self, payload_bytes: usize, quality: f64) -> f64 {
         let payload_bytes = payload_bytes as f64;
         match self.input {
-            // lossless zstd roughly halves depth; lower quality sends 1/stride² of the pixels
+            // lossless zstd (the default compression) roughly halves depth; lower quality sends 1/stride² of the pixels
             Input::Depth | Input::CompressedDepth => payload_bytes * 0.5 * depth::size_factor(quality),
             // int16 + zstd roughly quarters a float cloud; thinning sends 1 point in keep_every
             Input::PointCloud2 => payload_bytes * 0.25 / pointcloud::keep_every(quality) as f64,
@@ -132,13 +140,14 @@ mod tests {
         let names: Vec<_> = all().iter().map(|codec| (codec.name().to_owned(), codec.output())).collect();
         assert_eq!(names.len(), 10);
         assert!(names.contains(&("ros2-image".to_owned(), CodecOutput::Video)));
-        assert!(names.contains(&("dimos-depth".to_owned(), CodecOutput::Data)));
-        let depth = decode_and_encode("ros2-depth", "ros2/depth_16UC1.cdr", 1.0);
-        assert_eq!(&depth[..2], &[1, 1], "depth header: version 1, 16UC1");
-        let half = decode_and_encode("dimos-depth", "dimos/depth_16UC1.bin", 0.5);
-        assert_eq!(u16::from_le_bytes([half[2], half[3]]), 2, "stride 2 at quality 0.5");
-        let cloud = decode_and_encode("dimos-pointcloud2", "dimos/pointcloud_xyzi.bin", 1.0);
-        assert_eq!(u32::from_le_bytes(cloud[4..8].try_into().unwrap()), 20000);
+        assert!(names.contains(&("dimos-depth".to_owned(), CodecOutput::Fields)));
+        assert!(all().iter().all(|codec| (codec.default_compress() == Compress::Zstd) == (codec.output() == CodecOutput::Fields)), "depth and point clouds stay compressed");
+        let fields = |name: &str, file: &str, quality: f64| zenoh_web::fields::parse(&decode_and_encode(name, file, quality)).unwrap();
+        let depth = fields("ros2-depth", "ros2/depth_16UC1.cdr", 1.0);
+        assert_eq!((depth["version"].values(), depth["encoding"].text()), (vec![2.0], Some("16UC1")));
+        assert_eq!(fields("dimos-depth", "dimos/depth_16UC1.bin", 0.5)["stride"].values(), [2.0], "stride 2 at quality 0.5");
+        let cloud = fields("dimos-pointcloud2", "dimos/pointcloud_xyzi.bin", 1.0);
+        assert_eq!((cloud["version"].values(), cloud["count"].values()), (vec![3.0], vec![20000.0]));
         let codec = all().into_iter().find(|codec| codec.name() == "dimos-image").unwrap();
         let payload = fixture("dimos/image_rgb8.bin");
         let encoding = zenoh_web::zenoh::bytes::Encoding::default();
