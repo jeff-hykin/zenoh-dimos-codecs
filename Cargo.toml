@@ -1,0 +1,18 @@
+[package]
+name = "zenoh-dimos-codecs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "zenoh-web codecs for ROS 2 and dimos images, depth and point clouds"
+repository = "https://github.com/jeff-hykin/zenoh-dimos-codecs"
+publish = false
+
+[dependencies]
+zenoh-web = { git = "https://github.com/jeff-hykin/zenoh-web", rev = "d1d0f27a1a6f755def9259a9c541a09241eafae8" }
+anyhow = "1"
+# pure Rust decoders; zstd builds its C sources
+zstd = "0.13"
+zune-jpeg = "0.5"
+png = "0.18"
+image-webp = "0.2"
+jxl-oxide = "0.12"
