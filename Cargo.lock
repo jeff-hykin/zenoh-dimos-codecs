@@ -4793,7 +4793,7 @@ dependencies = [
 
 [[package]]
 name = "zenoh-dimos-codecs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "image-webp",
@@ -5211,8 +5211,8 @@ dependencies = [
 
 [[package]]
 name = "zenoh-web"
-version = "0.3.0"
-source = "git+https://github.com/jeff-hykin/zenoh-web?rev=0cdee77e81dcbe87e70b8524a7413ce7470b7de3#0cdee77e81dcbe87e70b8524a7413ce7470b7de3"
+version = "0.4.0"
+source = "git+https://github.com/jeff-hykin/zenoh-web?rev=58d5394024674117c2a4faab93d472299a54ef9b#58d5394024674117c2a4faab93d472299a54ef9b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5223,6 +5223,7 @@ dependencies = [
  "hmac",
  "log",
  "openh264",
+ "openh264-sys2",
  "serde",
  "serde_json",
  "sha1",
