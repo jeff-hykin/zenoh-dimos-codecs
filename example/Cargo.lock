@@ -5233,8 +5233,8 @@ dependencies = [
 
 [[package]]
 name = "zenoh-web"
-version = "0.4.0"
-source = "git+https://github.com/jeff-hykin/zenoh-web?rev=fb465e704544008095a00b5416d68b6abc91147c#fb465e704544008095a00b5416d68b6abc91147c"
+version = "0.4.1"
+source = "git+https://github.com/jeff-hykin/zenoh-web?rev=63b72ddd507fd31cd91dc1c3cc350336ebe08b89#63b72ddd507fd31cd91dc1c3cc350336ebe08b89"
 dependencies = [
  "anyhow",
  "async-trait",

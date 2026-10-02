@@ -16992,13 +16992,13 @@ rec {
       };
       "zenoh-web" = rec {
         crateName = "zenoh-web";
-        version = "0.4.0";
+        version = "0.4.1";
         edition = "2024";
         workspace_member = null;
         src = pkgs.fetchgit {
           url = "https://github.com/jeff-hykin/zenoh-web";
-          rev = "fb465e704544008095a00b5416d68b6abc91147c";
-          sha256 = "1r78his2wxxiczb8gamghlng6dbn07iafmgqc604drxqa0k14ki6";
+          rev = "63b72ddd507fd31cd91dc1c3cc350336ebe08b89";
+          sha256 = "0frfsc5j8jq0f14cmcidx64mmswf3g5naf71si5gqqbnq4r1bigm";
         };
         libName = "zenoh_web";
         dependencies = [
