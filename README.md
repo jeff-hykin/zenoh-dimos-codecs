@@ -74,6 +74,14 @@ into `msg.decoded`:
   maxError, positions (Float32Array, x, y, z per point, sent as int16 scaled by origin and scale),
   intensity (Uint8Array, only if the cloud has intensity), intensityMin, intensityScale }`.
 
+## Nix / cross compiling
+
+`nix build .#zenoh-dimos-codecs-example` (native) and `.#zenoh-dimos-codecs-example-aarch64-linux` /
+`-x86_64-linux` build `example/` (a loopback server with every codec) with zenoh-web's `lib.crossRust`: crate2nix, one
+derivation per crate shared with the other zenoh-web flakes, Linux cross compiled with zig (glibc 2.35). Pass
+`--max-jobs auto`. After changing `example/Cargo.lock`, `nix run github:jeff-hykin/zenoh-web#crate2nix -- generate` in
+`example/`. To build your own crate that uses this one, see zenoh-web's README "Nix / cross compiling".
+
 ## Tests
 
 ```sh
