@@ -1,8 +1,8 @@
 # zenoh-dimos-codecs
 
 [zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2 (rmw_zenoh) and dimos sensor
-messages: images as H.264 video, lossless depth and quantized point clouds. A Rust
-crate of `zenoh_web::Codec`s and nothing else: depth and point clouds are zenoh-web **fields**, which
+messages: images as H.264 video, lossless depth and quantized point clouds, plus hardware H.264 encoders
+(see [Hardware encoders](#hardware-encoders)). A Rust crate of `zenoh_web::Codec`s and encoders: depth and point clouds are zenoh-web **fields**, which
 zenoh-web's own browser client decodes, so pages need no code from here. The `zenoh-web` command
 ([zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)) has them all.
 
@@ -62,6 +62,45 @@ Error per axis of a sent point is at most `scale / 2` (`maxError`), where `scale
 bounding-box extent / 2) / 32767` in the cloud's own units, plus f32 rounding. Intensity is scaled to
 u8 over the message's min..max (`intensityMin`, `intensityScale`). `positions` is a `Float32Array`.
 
+## Hardware encoders
+
+`zenoh_dimos_codecs::encoders`: hardware H.264 encoders as zenoh-web `VideoEncoder`s for
+`ServerBuilder::video_encoder` (formerly the zenoh-web-encoders crate). [zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)
+and [zenoh-web-relay](https://github.com/jeff-hykin/zenoh-web-relay) use them (`--video-encoder auto|software|videotoolbox|gstreamer`).
+
+| feature | backend | needs |
+|---|---|---|
+| `videotoolbox` | macOS VideoToolbox (the media engine): constrained baseline, low-latency rate control | macOS (does nothing elsewhere) |
+| `gstreamer` | the first GStreamer hardware encoder that works: `nvv4l2h264enc` (Jetson), `nvh264enc` (NVENC), `vah264enc` / `vaapih264enc` (VAAPI) | GStreamer 1.x at runtime only: it is loaded with `dlopen`, so building needs nothing and a machine without it falls back to software |
+
+```toml
+zenoh-dimos-codecs = { git = "https://github.com/jeff-hykin/zenoh-dimos-codecs", rev = "<commit>", features = ["videotoolbox", "gstreamer"] }
+```
+
+```rust
+let selected = zenoh_dimos_codecs::encoders::select(zenoh_dimos_codecs::encoders::Backend::Auto)?;
+if let Some(factory) = selected.factory {
+    builder = builder.video_encoder(factory); // else zenoh-web's software H.264
+}
+```
+
+- `select` probes each backend by encoding a test frame; `Auto` tries VideoToolbox, then GStreamer, then picks
+  software. A named backend that doesn't work is an error.
+- Each encoder is wrapped in `Fallback`: after its first error it hands over to openh264 for good (a new software
+  encoder starts with a keyframe).
+- All of them encode at the bitrate zenoh-web grants (changed in place, no keyframe), restart on a new picture size,
+  give keyframes on request, and signal zenoh-web's colors (BT.601 matrix, BT.709 primaries and transfer).
+- `examples/encode_file.rs` encodes raw RGB frames (or a moving test pattern) with any backend to an `.h264` file, to
+  try an encoder on a machine and measure it offline.
+
+Measured on the zenoh-web bench scene (720p60, offline, decoded by ffmpeg): VideoToolbox 3.95 Mbit/s → 29.34 dB,
+8.2 → 29.68, 15.4 → 29.90; openh264 4.0 → 29.37, 8.3 → 29.68, 16.2 → 29.88. Same quality per bit, but on the media
+engine instead of a core per stream.
+
+On a Jetson AGX Orin (JetPack 6, GStreamer 1.20; under load from the robot's own stack): `nvv4l2h264enc` took 6-14 ms
+per 720p frame (three frames in flight) against openh264's 34 ms, hit its bitrate, and scored 30.27 dB on the bench
+scene at 16.6 Mbit/s against openh264's 29.57.
+
 ## Wire formats
 
 Both are zenoh-web fields messages (zenoh-web SPEC "Fields"), zstd-compressed by default
@@ -77,10 +116,13 @@ into `msg.decoded`:
 ## Nix / cross compiling
 
 `nix build .#zenoh-dimos-codecs-example` (native) and `.#zenoh-dimos-codecs-example-aarch64-linux` /
-`-x86_64-linux` build `example/` (a loopback server with every codec) with zenoh-web's `lib.crossRust`: crate2nix, one
-derivation per crate shared with the other zenoh-web flakes, Linux cross compiled with zig (glibc 2.35). Pass
-`--max-jobs auto`. After changing `example/Cargo.lock`, `nix run github:jeff-hykin/zenoh-web#crate2nix -- generate` in
-`example/`. To build your own crate that uses this one, see zenoh-web's README "Nix / cross compiling".
+`-x86_64-linux` build `example/` with both encoder features: `zenoh-dimos-codecs-example [auto|software|videotoolbox|gstreamer] [frames]`
+lists the codecs, starts and stops a loopback server with them, then selects an encoder and times it on a 720p test
+pattern. Built with zenoh-web's `lib.crossRust`: crate2nix, one derivation per crate shared with the other zenoh-web
+flakes, Linux cross compiled with zig (glibc 2.35). GStreamer is opened at runtime, so the Linux builds need no
+GStreamer and the feature is always compiled in. Pass `--max-jobs auto`. After changing `example/Cargo.lock`,
+`nix run github:jeff-hykin/zenoh-web#crate2nix -- generate` in `example/`. To build your own crate that uses this one,
+see zenoh-web's README "Nix / cross compiling".
 
 ## Tests
 

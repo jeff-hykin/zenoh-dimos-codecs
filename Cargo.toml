@@ -3,12 +3,20 @@ name = "zenoh-dimos-codecs"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
-description = "zenoh-web codecs for ROS 2 and dimos images, depth and point clouds"
+description = "zenoh-web codecs for ROS 2 and dimos images, depth and point clouds, plus hardware H.264 encoders (macOS VideoToolbox, GStreamer: Jetson nvv4l2h264enc, NVENC, VAAPI) with a fallback to software"
 repository = "https://github.com/jeff-hykin/zenoh-dimos-codecs"
 license-file = "LICENSE"
 readme = "README.md"
 # only what building the library needs (no test fixtures)
 include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/LICENSE"]
+
+[features]
+default = []
+# encoders: macOS VideoToolbox (the media engine); does nothing elsewhere
+videotoolbox = []
+# encoders: GStreamer's hardware H.264 encoders, loaded at runtime (dlopen, so building needs no GStreamer): nvv4l2h264enc
+# (Jetson), nvh264enc (NVENC), vah264enc / vaapih264enc (VAAPI)
+gstreamer = ["dep:libloading"]
 
 [dependencies]
 zenoh-web = { version = "0.4.0", git = "https://github.com/jeff-hykin/zenoh-web", rev = "fb465e704544008095a00b5416d68b6abc91147c" }
@@ -18,3 +26,10 @@ zune-jpeg = "0.5"
 png = "0.18"
 image-webp = "0.2"
 jxl-oxide = "0.12"
+# encoders
+log = "0.4"
+libloading = { version = "0.9", optional = true }
+
+[dev-dependencies]
+# decodes what the hardware encoders produce
+openh264 = "0.9"

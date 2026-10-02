@@ -3,10 +3,10 @@ name = "zenoh-dimos-codecs-example"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Smoke test for the nix builds: a zenoh-web server with every dimos / ROS 2 codec on loopback"
+description = "Smoke test for the nix builds: a zenoh-web server with every dimos / ROS 2 codec on loopback, then an encoder probe"
 
 [dependencies]
-zenoh-dimos-codecs = { path = ".." }
+zenoh-dimos-codecs = { path = "..", features = ["videotoolbox", "gstreamer"] }
 zenoh-web = { version = "0.4.0", git = "https://github.com/jeff-hykin/zenoh-web", rev = "fb465e704544008095a00b5416d68b6abc91147c" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"

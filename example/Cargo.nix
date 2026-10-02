@@ -5611,7 +5611,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "extra_traits" "std" ];
       };
-      "libloading" = rec {
+      "libloading 0.8.9" = rec {
         crateName = "libloading";
         version = "0.8.9";
         edition = "2015";
@@ -5632,6 +5632,31 @@ rec {
           }
         ];
 
+      };
+      "libloading 0.9.0" = rec {
+        crateName = "libloading";
+        version = "0.9.0";
+        edition = "2021";
+        sha256 = "0q4bvhp4kqy2v3bw4cn2bmyq73hskqd1ansa9125gfq5x0ns4k3m";
+        authors = [
+          "Simonas Kazlauskas <libloading@kazlauskas.me>"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+            target = { target, features }: (target."unix" or false);
+          }
+          {
+            name = "windows-link";
+            packageId = "windows-link";
+            target = { target, features }: (target."windows" or false);
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+        };
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "libm" = rec {
         crateName = "libm";
@@ -15318,6 +15343,15 @@ rec {
             packageId = "jxl-oxide";
           }
           {
+            name = "libloading";
+            packageId = "libloading 0.9.0";
+            optional = true;
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
             name = "png";
             packageId = "png";
           }
@@ -15330,7 +15364,10 @@ rec {
             packageId = "zune-jpeg";
           }
         ];
-
+        features = {
+          "gstreamer" = [ "dep:libloading" ];
+        };
+        resolvedDefaultFeatures = [ "default" "gstreamer" "videotoolbox" ];
       };
       "zenoh-dimos-codecs-example" = rec {
         crateName = "zenoh-dimos-codecs-example";
@@ -15357,6 +15394,7 @@ rec {
           {
             name = "zenoh-dimos-codecs";
             packageId = "zenoh-dimos-codecs";
+            features = [ "videotoolbox" "gstreamer" ];
           }
           {
             name = "zenoh-web";
@@ -16389,7 +16427,7 @@ rec {
           }
           {
             name = "libloading";
-            packageId = "libloading";
+            packageId = "libloading 0.8.9";
           }
           {
             name = "serde";
@@ -16891,7 +16929,7 @@ rec {
           }
           {
             name = "libloading";
-            packageId = "libloading";
+            packageId = "libloading 0.8.9";
           }
           {
             name = "pnet_datalink";
