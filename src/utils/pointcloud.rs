@@ -9,7 +9,7 @@
 //! whatever units the cloud uses. Thinning keeps points 0, N, 2N, ... in message order: it never
 //! moves a point and assumes nothing about units or spacing.
 
-use crate::wire::{PointCloud, PointField};
+use crate::codecs::msgs::{PointCloud, PointField};
 use anyhow::{Context, Result, bail, ensure};
 use std::borrow::Cow;
 use zenoh_web::Fields;
@@ -124,6 +124,11 @@ pub fn encode(cloud: &PointCloud, quality: f64) -> Result<Vec<u8>> {
     Ok(encode_points(&read_points(cloud)?, quality))
 }
 
+/// The allocator's size prior: int16 + zstd roughly quarters a float cloud; thinning sends 1 point in keep_every.
+pub fn estimated_bytes(payload_bytes: usize, quality: f64) -> f64 {
+    payload_bytes as f64 * 0.25 / keep_every(quality) as f64
+}
+
 pub fn encode_points(cloud: &Points, quality: f64) -> Vec<u8> {
     let has_intensity = cloud.has_intensity;
     let source_count = cloud.points.len();
@@ -171,7 +176,10 @@ pub fn encode_points(cloud: &Points, quality: f64) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{Protocol, parse_point_cloud, tests::fixture};
+    use crate::codecs::msgs::{dimos_lcm_pointcloud2, ros2_pointcloud2};
+    use crate::utils::tests::fixture;
+
+    type Parse = fn(&[u8]) -> Result<PointCloud<'_>>;
 
     /// (positions as the client computes them, intensity, scale)
     fn decode(bytes: &[u8]) -> (Vec<[f32; 3]>, Option<Vec<u8>>, f32) {
@@ -184,9 +192,9 @@ mod tests {
 
     #[test]
     fn full_quality_within_bound() {
-        for (protocol, file, intensity) in [(Protocol::Ros2, "ros2/pointcloud_xyz.cdr", false), (Protocol::Dimos, "dimos/pointcloud_xyzi.bin", true)] {
+        for (parse, file, intensity) in [(ros2_pointcloud2::parse as Parse, "ros2/pointcloud_xyz.cdr", false), (dimos_lcm_pointcloud2::parse, "dimos/pointcloud_xyzi.bin", true)] {
             let payload = fixture(file);
-            let encoded = encode(&parse_point_cloud(protocol, &payload).unwrap(), 1.0).unwrap();
+            let encoded = encode(&parse(&payload).unwrap(), 1.0).unwrap();
             let (positions, intensities, scale) = decode(&encoded);
             assert_eq!(positions.len(), 20000, "{file}");
             let bound = scale / 2.0 + 1e-5;
@@ -227,7 +235,7 @@ mod tests {
     #[test]
     fn thinning_keeps_every_nth_source_point_unmoved() {
         let payload = fixture("ros2/pointcloud_xyz.cdr");
-        let cloud = parse_point_cloud(Protocol::Ros2, &payload).unwrap();
+        let cloud = ros2_pointcloud2::parse(&payload).unwrap();
         for (quality, keep) in [(0.5, 2usize), (1.0 / 3.0, 3)] {
             let encoded = encode(&cloud, quality).unwrap();
             assert_eq!(zenoh_web::fields::parse(&encoded).unwrap()["keepEvery"].values(), [keep as f64]);

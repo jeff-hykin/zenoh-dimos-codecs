@@ -21,21 +21,28 @@ for codec in zenoh_dimos_codecs::all() {
 ```js
 import { connect } from "https://esm.sh/gh/jeff-hykin/zenoh-web@<commit>/client/zenoh_web.ts"
 const z = await connect("http://robot.local:7448")
-z.codecs   // [{ name: "dimos-depth", output: "fields" }, { name: "dimos-image", output: "video" }, ...]
-z.subscribe("dimos/camera/depth/sensor_msgs.Image", { codec: "dimos-depth" }, (msg) => draw(msg.decoded))
+z.codecs   // [{ name: "dimos_lcm_depth", output: "fields" }, { name: "dimos_lcm_image", output: "video" }, ...]
+z.subscribe("dimos/camera/depth/sensor_msgs.Image", { codec: "dimos_lcm_depth" }, (msg) => draw(msg.decoded))
 ```
 
 ## Codecs
 
-Named `<protocol>-<input type>`; the input type decides the output:
+One file per message type in [`src/codecs/msgs/`](src/codecs/msgs), and the codec's name is the file's name
+(`<protocol>_<message type>`; `ros2` is ROS 2 over rmw_zenoh, `dimos_lcm` is dimos' LCM over zenoh):
 
 | codec | input message | output |
 |---|---|---|
-| `ros2-image`, `dimos-image` | `sensor_msgs/Image`: rgb8, bgr8, rgba8, bgra8, mono8, mono16/16UC1 (top 8 bits), or `jpeg`/`png` data in an Image (dimos' jpeg-encoded Image) | H.264 video track (`sub.mediaStream`) |
-| `ros2-compressed-image`, `dimos-compressed-image` | `sensor_msgs/CompressedImage`: jpeg, png, webp, jxl (magic bytes first, `format` string second) | H.264 video track |
-| `ros2-depth`, `dimos-depth` | `sensor_msgs/Image`: 16UC1, 32FC1, mono16 | lossless depth: `msg.decoded` is a depth image (below) |
-| `ros2-compressed-depth`, `dimos-compressed-depth` | `sensor_msgs/CompressedImage`: 16-bit gray png or jxl, ROS `compressedDepth` png (12-byte header skipped; its quantized 32FC1 form is refused) | lossless depth |
-| `ros2-pointcloud2`, `dimos-pointcloud2` | `sensor_msgs/PointCloud2`, any field layout | quantized points: `msg.decoded` is a point cloud (below) |
+| `ros2_image`, `dimos_lcm_image` | `sensor_msgs/Image`: rgb8, bgr8, rgba8, bgra8, mono8, mono16/16UC1 (top 8 bits), or `jpeg`/`png` data in an Image (dimos' jpeg-encoded Image) | H.264 video track (`sub.mediaStream`) |
+| `ros2_compressed_image`, `dimos_lcm_compressed_image` | `sensor_msgs/CompressedImage`: jpeg, png, webp, jxl (magic bytes first, `format` string second) | H.264 video track |
+| `ros2_depth`, `dimos_lcm_depth` | `sensor_msgs/Image`: 16UC1, 32FC1, mono16 | lossless depth: `msg.decoded` is a depth image (below) |
+| `ros2_compressed_depth`, `dimos_lcm_compressed_depth` | `sensor_msgs/CompressedImage`: 16-bit gray png or jxl, ROS `compressedDepth` png (12-byte header skipped; its quantized 32FC1 form is refused) | lossless depth |
+| `ros2_pointcloud2`, `dimos_lcm_pointcloud2` | `sensor_msgs/PointCloud2`, any field layout | quantized points: `msg.decoded` is a point cloud (below) |
+| `ros2_raw_audio`, `dimos_lcm_raw_audio` | `foxglove_msgs/RawAudio`: `pcm-s16`, any rate (resampled to 48 kHz unless Opus takes it), the first 2 channels | Opus audio track (`sub.mediaStream`) |
+
+To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_web::Codec` impl named after
+the file, listed in `src/codecs/msgs/mod.rs` and `codecs::all()` (a test checks every file is registered). Shared
+pieces are in `src/utils/`: the CDR and LCM readers, image decoders (`jpeg`, `png`, `webp`, `jxl`,
+`raw_pixels`, `compressed_image`), `pcm`, `depth` and `pointcloud`.
 
 Inputs:
 - ROS 2 over rmw_zenoh: key `<domain>/<topic>/<pkg>::msg::dds_::<Type>_/RIHS01_<hash>`, payload CDR with
@@ -43,8 +50,8 @@ Inputs:
 - dimos over zenoh: key `<topic>/<msg_name>` (e.g. `dimos/camera/color/sensor_msgs.Image`), payload in
   the dimos message format (big endian) with its 8-byte type fingerprint, which the codec checks (a
   wrong type is an error, counted in zenoh-web's `codecErrors` / `lastCodecError` stats).
-- mono16 is ambiguous (IR intensity or depth-like); the subscriber decides: `*-image` shows its top
-  8 bits as gray video, `*-depth` delivers it losslessly with encoding `mono16`.
+- mono16 is ambiguous (IR intensity or depth-like); the subscriber decides: `*_image` shows its top
+  8 bits as gray video, `*_depth` delivers it losslessly with encoding `mono16`.
 - Decoders are pure Rust (zune-jpeg, png, image-webp, jxl-oxide). A YCbCr JPEG with
   even sides decodes straight to I420 (full range → BT.601 limited), never through RGB; everything
   else decodes to RGB8.
