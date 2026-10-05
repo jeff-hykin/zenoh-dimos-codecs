@@ -1,10 +1,10 @@
 //! `sensor_msgs/CompressedImage` depth (16-bit PNG or JPEG XL, also ROS `compressedDepth`) from ROS 2 (rmw_zenoh, CDR), lossless on a
-//! data channel as zenoh-web fields.
+//! data channel as zenoh-gateway fields.
 
 use super::ros2_compressed_image;
 use crate::utils::depth;
 use anyhow::Result;
-use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// `ros2_compressed_depth`
 pub struct Ros2CompressedDepth;

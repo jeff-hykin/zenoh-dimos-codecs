@@ -1,4 +1,4 @@
-//! Lossless depth on a data channel (16UC1 / 32FC1 / mono16 images, raw or 16-bit png / jxl): nearest-neighbor downscale (never interpolated), as zenoh-web
+//! Lossless depth on a data channel (16UC1 / 32FC1 / mono16 images, raw or 16-bit png / jxl): nearest-neighbor downscale (never interpolated), as zenoh-gateway
 //! fields (zstd-compressed by the bridge by default), see README "Wire formats":
 //! `version=2`, `encoding` ("16UC1", "32FC1" or "mono16"), `stride`, `width`, `height`, `sourceWidth`,
 //! `sourceHeight`, `data` (width × height u16 or f32, row-major).
@@ -7,7 +7,7 @@ use crate::codecs::msgs::RawImage;
 use crate::utils::compressed_image::{self, FileFormat};
 use crate::utils::{jxl, png, raw_pixels};
 use anyhow::{Context, Result, bail, ensure};
-use zenoh_web::Fields;
+use zenoh_gateway::Fields;
 
 /// Depth wire encodings (see SPEC "Wire formats": depth header byte 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,15 +140,15 @@ mod tests {
     fn full_quality_round_trips_and_downscale_is_nearest() {
         let values: Vec<u16> = (0..12u16).collect();
         let depth = Depth { width: 4, height: 3, encoding: DepthEncoding::U16, values: DepthValues::U16(values.clone()) };
-        let full = zenoh_web::fields::parse(&encode(&depth, 1.0)).unwrap();
+        let full = zenoh_gateway::fields::parse(&encode(&depth, 1.0)).unwrap();
         assert_eq!((full["version"].values(), full["encoding"].text(), full["stride"].values()), (vec![2.0], Some("16UC1"), vec![1.0]));
         assert_eq!(full["data"].values(), values.iter().map(|&value| value as f64).collect::<Vec<_>>());
-        let half = zenoh_web::fields::parse(&encode(&depth, 0.5)).unwrap();
+        let half = zenoh_gateway::fields::parse(&encode(&depth, 0.5)).unwrap();
         assert_eq!((half["width"].values(), half["height"].values(), half["sourceWidth"].values()), (vec![2.0], vec![2.0], vec![4.0]));
         assert_eq!(half["data"].values(), [0.0, 2.0, 8.0, 10.0], "every value is a source value, never a blend");
         let floats = Depth { width: 2, height: 1, encoding: DepthEncoding::F32, values: DepthValues::F32(vec![1.5, f32::NAN]) };
-        let floats = zenoh_web::fields::parse(&encode(&floats, 1.0)).unwrap();
-        assert_eq!((floats["encoding"].text(), floats["data"].dtype), (Some("32FC1"), zenoh_web::fields::Dtype::F32));
+        let floats = zenoh_gateway::fields::parse(&encode(&floats, 1.0)).unwrap();
+        assert_eq!((floats["encoding"].text(), floats["data"].dtype), (Some("32FC1"), zenoh_gateway::fields::Dtype::F32));
     }
 
     #[test]

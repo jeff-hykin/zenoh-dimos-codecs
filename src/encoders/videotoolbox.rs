@@ -1,4 +1,4 @@
-//! macOS VideoToolbox H.264 (the hardware encoder): constrained baseline, low-latency rate control, zenoh-web's colors
+//! macOS VideoToolbox H.264 (the hardware encoder): constrained baseline, low-latency rate control, zenoh-gateway's colors
 //! signaled (BT.601 matrix, BT.709 primaries and transfer),
 //! one frame in, one access unit out.
 
@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow, bail, ensure};
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
-use zenoh_web::{DecodedFrame, EncodedVideo, VideoEncoder, VideoFormat, VideoTarget};
+use zenoh_gateway::{DecodedFrame, EncodedVideo, VideoEncoder, VideoFormat, VideoTarget};
 
 type CFTypeRef = *const c_void;
 type OSStatus = i32;

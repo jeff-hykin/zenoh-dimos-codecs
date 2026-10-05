@@ -6,7 +6,7 @@ use crate::utils::compressed_image;
 use crate::utils::{lcm::Lcm, raw_pixels};
 use anyhow::Result;
 use serde_json::{Map, Value};
-use zenoh_web::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
+use zenoh_gateway::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
 
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_IMAGE: [u8; 8] = [0x53, 0x5c, 0xfa, 0xce, 0x1f, 0x4f, 0x57, 0x17];

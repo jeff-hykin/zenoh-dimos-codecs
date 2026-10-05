@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
 use std::time::Duration;
-use zenoh_web::{DecodedFrame, EncodedVideo, VideoEncoder, VideoFormat, VideoTarget};
+use zenoh_gateway::{DecodedFrame, EncodedVideo, VideoEncoder, VideoFormat, VideoTarget};
 
 type Pointer = *mut c_void;
 
@@ -210,7 +210,7 @@ impl Drop for Pipeline {
 
 impl Pipeline {
     fn new(api: &'static Api, element: &'static Element, (width, height): (u32, u32), bitrate_bps: u32, fps: f64) -> Result<Self> {
-        // colorimetry 2:4:5:1: limited range, BT.601 matrix, BT.709 transfer and primaries (zenoh-web's pictures)
+        // colorimetry 2:4:5:1: limited range, BT.601 matrix, BT.709 transfer and primaries (zenoh-gateway's pictures)
         let description = format!(
             "appsrc name=source is-live=true do-timestamp=true format=time caps=video/x-raw,format=I420,width={width},height={height},framerate={}/1000,colorimetry=2:4:5:1 ! {} {} name=encoder ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=sink sync=false",
             (fps * 1000.0).round().max(1.0) as u64,
@@ -358,7 +358,7 @@ impl GstreamerEncoder {
     }
 
     fn probe(&mut self) -> Result<()> {
-        let image = zenoh_web::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
+        let image = zenoh_gateway::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
         for _ in 0..=MAX_IN_FLIGHT + 1 {
             if self.encode(&DecodedFrame::Video(image.clone()), &VideoTarget::new(320, 240, 1_000_000, 30.0))?.is_some() {
                 return Ok(());

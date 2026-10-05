@@ -2,7 +2,7 @@
 
 use crate::utils::raw_pixels::{Rgb8, samples_to_rgb};
 use anyhow::{Context, Result, ensure};
-use zenoh_web::VideoImage;
+use zenoh_gateway::VideoImage;
 
 /// RGB8 as a JPEG at `quality` (0..1 → JPEG quality 20..95).
 pub fn encode(image: &Rgb8, quality: f64) -> Result<Vec<u8>> {
@@ -26,7 +26,7 @@ pub fn to_rgb(data: &[u8]) -> Result<Rgb8> {
 }
 
 /// JFIF's full-range YCbCr as BT.601 limited-range I420 (what the H.264 stream is tagged as, and
-/// what zenoh-web's RGB conversion produces), chroma from each 2x2 block's mean.
+/// what zenoh-gateway's RGB conversion produces), chroma from each 2x2 block's mean.
 /// `None` for a JPEG that isn't YCbCr or has an odd side.
 pub fn to_i420(data: &[u8]) -> Result<Option<VideoImage>> {
     use zune_jpeg::zune_core::bytestream::ZCursor;
@@ -66,7 +66,7 @@ pub fn to_i420(data: &[u8]) -> Result<Option<VideoImage>> {
 mod tests {
     use super::*;
 
-    /// BT.601 limited-range I420 with chroma from each 2x2 block's mean, as zenoh-web converts RGB.
+    /// BT.601 limited-range I420 with chroma from each 2x2 block's mean, as zenoh-gateway converts RGB.
     fn rgb_to_i420(rgb: &Rgb8) -> Vec<u8> {
         let width = rgb.width as usize;
         let pixel = |x: usize, y: usize| {
@@ -92,7 +92,7 @@ mod tests {
     fn jpeg_goes_to_i420_like_rgb_would() {
         let jpeg = include_bytes!("../../test/fixtures/test_image.jpg");
         let direct = to_i420(jpeg).unwrap().unwrap();
-        assert_eq!(direct.format(), zenoh_web::PixelFormat::I420, "a YCbCr jpeg skips rgb");
+        assert_eq!(direct.format(), zenoh_gateway::PixelFormat::I420, "a YCbCr jpeg skips rgb");
         let rgb = to_rgb(jpeg).unwrap();
         let through_rgb = rgb_to_i420(&rgb);
         // RGB clips out-of-gamut YCbCr, so a few saturated pixels may differ more; on average they agree

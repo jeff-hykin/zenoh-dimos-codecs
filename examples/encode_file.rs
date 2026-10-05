@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use std::io::{Read, Write};
 use std::time::Instant;
-use zenoh_web::{DecodedFrame, VideoEncoder, VideoImage, VideoTarget};
+use zenoh_gateway::{DecodedFrame, VideoEncoder, VideoImage, VideoTarget};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     };
     let frames = args.get(7).map(|count| count.parse()).transpose()?.unwrap_or(if input.is_empty() { 300 } else { input.len() / frame_len });
     let mut encoder: Box<dyn VideoEncoder> = match backend.as_str() {
-        "software" => Box::new(zenoh_web::H264Encoder::default()),
+        "software" => Box::new(zenoh_gateway::H264Encoder::default()),
         #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
         "videotoolbox" => Box::new(zenoh_dimos_codecs::encoders::videotoolbox::VideoToolboxEncoder::default()),
         #[cfg(feature = "gstreamer")]

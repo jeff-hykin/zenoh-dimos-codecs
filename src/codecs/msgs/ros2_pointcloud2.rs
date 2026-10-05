@@ -1,9 +1,9 @@
-//! `sensor_msgs/PointCloud2` from ROS 2 (rmw_zenoh, CDR), thinned and int16-quantized on a data channel as zenoh-web fields.
+//! `sensor_msgs/PointCloud2` from ROS 2 (rmw_zenoh, CDR), thinned and int16-quantized on a data channel as zenoh-gateway fields.
 
 use super::{PointCloud, PointField};
 use crate::utils::{cdr::Cdr, pointcloud};
 use anyhow::{Result, ensure};
-use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// `ros2_pointcloud2`
 pub struct Ros2PointCloud2;

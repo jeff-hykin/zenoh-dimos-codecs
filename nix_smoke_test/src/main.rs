@@ -1,12 +1,12 @@
 //! `zenoh-dimos-codecs-example [auto|software|videotoolbox|gstreamer] [frames]`: lists the codecs, starts and stops a
-//! zenoh-web server with all of them on 127.0.0.1 (isolated zenoh session: no scouting, no listeners), then selects a
+//! zenoh-gateway server with all of them on 127.0.0.1 (isolated zenoh session: no scouting, no listeners), then selects a
 //! video encoder (probing hardware ones by encoding a test frame) and times it on `frames` (default 60) of a moving
 //! 1280x720 test pattern.
 
 use anyhow::Result;
 use std::time::Instant;
 use zenoh_dimos_codecs::encoders::{Backend, select};
-use zenoh_web::{DecodedFrame, H264Encoder, Server, VideoEncoder, VideoImage, VideoTarget, zenoh};
+use zenoh_gateway::{DecodedFrame, H264Encoder, Server, VideoEncoder, VideoImage, VideoTarget, zenoh};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     config.insert_json5("listen/endpoints", "[]").map_err(anyhow::Error::msg)?;
     let mut builder = Server::builder().zenoh_config(config);
     for codec in codecs {
-        builder = builder.shared_codec(codec);
+        builder = builder.shared_encoding(codec);
     }
     let running = builder.build().await?.bind("127.0.0.1:0").await?;
     println!("serving on http://{}", running.local_addr());

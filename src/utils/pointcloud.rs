@@ -1,4 +1,4 @@
-//! PointCloud2 to compact zenoh-web fields (zstd-compressed by the bridge by default): optional
+//! PointCloud2 to compact zenoh-gateway fields (zstd-compressed by the bridge by default): optional
 //! thinning (keep every Nth point), xyz quantized to int16 around a per-message origin, optional u8
 //! intensity. Fields, see README "Wire formats": `version=3`, `count`, `sourceCount`, `origin` (f32 × 3),
 //! `scale`, `keepEvery`, `maxError`, `positions` (scaled i16 x, y, z), `intensity` (u8, if the cloud
@@ -12,7 +12,7 @@
 use crate::codecs::msgs::{PointCloud, PointField};
 use anyhow::{Context, Result, bail, ensure};
 use std::borrow::Cow;
-use zenoh_web::Fields;
+use zenoh_gateway::Fields;
 
 pub const VERSION: u8 = 3;
 /// Thinning at quality 0: keep 1 point in this many.
@@ -183,7 +183,7 @@ mod tests {
 
     /// (positions as the client computes them, intensity, scale)
     fn decode(bytes: &[u8]) -> (Vec<[f32; 3]>, Option<Vec<u8>>, f32) {
-        let fields = zenoh_web::fields::parse(bytes).unwrap();
+        let fields = zenoh_gateway::fields::parse(bytes).unwrap();
         assert_eq!(fields["version"].values(), [VERSION as f64]);
         let positions = fields["positions"].values().as_chunks::<3>().0.iter().map(|xyz| xyz.map(|value| value as f32)).collect();
         let intensity = fields.get("intensity").map(|field| field.data.clone());
@@ -223,7 +223,7 @@ mod tests {
         let cloud = Points { points, has_intensity: false };
         let [full, half, lowest] = [1.0, 0.5, 0.0].map(|quality| encode_points(&cloud, quality));
         assert!(half.len() * 4 < full.len() * 3 && lowest.len() < half.len(), "{} / {} / {}", full.len(), half.len(), lowest.len());
-        assert_eq!(zenoh_web::fields::parse(&encode_points(&cloud, 0.5)).unwrap()["count"].values(), [10000.0]);
+        assert_eq!(zenoh_gateway::fields::parse(&encode_points(&cloud, 0.5)).unwrap()["count"].values(), [10000.0]);
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         let cloud = ros2_pointcloud2::parse(&payload).unwrap();
         for (quality, keep) in [(0.5, 2usize), (1.0 / 3.0, 3)] {
             let encoded = encode(&cloud, quality).unwrap();
-            assert_eq!(zenoh_web::fields::parse(&encoded).unwrap()["keepEvery"].values(), [keep as f64]);
+            assert_eq!(zenoh_gateway::fields::parse(&encoded).unwrap()["keepEvery"].values(), [keep as f64]);
             let (positions, _, scale) = decode(&encoded);
             assert_eq!(positions.len(), 20000usize.div_ceil(keep));
             for (sent, position) in positions.iter().enumerate() {

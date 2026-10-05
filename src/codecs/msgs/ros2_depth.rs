@@ -1,9 +1,9 @@
-//! `sensor_msgs/Image` depth (16UC1, 32FC1, mono16) from ROS 2 (rmw_zenoh, CDR), lossless on a data channel as zenoh-web fields.
+//! `sensor_msgs/Image` depth (16UC1, 32FC1, mono16) from ROS 2 (rmw_zenoh, CDR), lossless on a data channel as zenoh-gateway fields.
 
 use super::ros2_image;
 use crate::utils::depth;
 use anyhow::Result;
-use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// `ros2_depth`
 pub struct Ros2Depth;

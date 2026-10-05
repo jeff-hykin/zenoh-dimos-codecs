@@ -1,8 +1,8 @@
-//! Raw audio (foxglove `RawAudio` blocks) to the PCM zenoh-web's Opus path takes: 16-bit, 1 or 2 channels, at a
+//! Raw audio (foxglove `RawAudio` blocks) to the PCM zenoh-gateway's Opus path takes: 16-bit, 1 or 2 channels, at a
 //! rate Opus accepts.
 
 use anyhow::{Result, ensure};
-use zenoh_web::AudioPcm;
+use zenoh_gateway::AudioPcm;
 
 /// The rates Opus takes; others are resampled to 48 kHz.
 const OPUS_RATES: [u32; 5] = [8_000, 12_000, 16_000, 24_000, 48_000];

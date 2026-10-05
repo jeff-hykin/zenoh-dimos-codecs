@@ -1,9 +1,9 @@
-//! `foxglove_msgs/RawAudio` from ROS 2 (rmw_zenoh, CDR) as audio: `pcm-s16` blocks to PCM for zenoh-web's Opus track.
+//! `foxglove_msgs/RawAudio` from ROS 2 (rmw_zenoh, CDR) as audio: `pcm-s16` blocks to PCM for zenoh-gateway's Opus track.
 
 use super::RawAudio;
 use crate::utils::{cdr::Cdr, pcm};
 use anyhow::Result;
-use zenoh_web::{MessageEncoding, Channel, EncodingOutput, EncodingSample, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodingOutput, EncodingSample, DecodedFrame};
 
 /// `ros2_raw_audio`
 pub struct Ros2RawAudio;

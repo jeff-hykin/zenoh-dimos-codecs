@@ -1,10 +1,10 @@
 # zenoh-dimos-codecs
 
-[zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2 (rmw_zenoh) and dimos sensor
+[zenoh-gateway](https://github.com/jeff-hykin/zenoh-gateway) codecs for ROS 2 (rmw_zenoh) and dimos sensor
 messages: images as H.264 video, lossless depth and quantized point clouds, plus hardware H.264 encoders
-(see [Hardware encoders](#hardware-encoders)). A Rust crate of `zenoh_web::MessageEncoding`s and encoders: depth and point clouds are zenoh-web **fields**, which
-zenoh-web's own browser client decodes, so pages need no code from here. The `zenoh-web` command
-([zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)) has them all.
+(see [Hardware encoders](#hardware-encoders)). A Rust crate of `zenoh_gateway::MessageEncoding`s and encoders: depth and point clouds are zenoh-gateway **fields**, which
+zenoh-gateway's own browser client decodes, so pages need no code from here. The `zenoh-gateway` command
+([zenoh-gateway-cli](https://github.com/jeff-hykin/zenoh-gateway-cli)) has them all.
 
 ```toml
 [dependencies]
@@ -12,14 +12,14 @@ zenoh-dimos-codecs = { git = "https://github.com/jeff-hykin/zenoh-dimos-codecs",
 ```
 
 ```rust
-let mut builder = zenoh_web::Server::builder();
+let mut builder = zenoh_gateway::Server::builder();
 for codec in zenoh_dimos_codecs::all() {
     builder = builder.shared_encoding(codec);
 }
 ```
 
 ```js
-import { connect } from "https://esm.sh/gh/jeff-hykin/zenoh-web@<commit>/client/zenoh_web.ts"
+import { connect } from "https://esm.sh/gh/jeff-hykin/zenoh-gateway@<commit>/client/zenoh_gateway.ts"
 const z = await connect("http://robot.local:7448")
 z.encodings   // [{ name: "dimos_lcm_depth", output: "fields" }, { name: "dimos_lcm_image", output: "video" }, ...]
 z.subscribe("dimos/camera/depth/sensor_msgs.Image", { encoding: "dimos_lcm_depth" }, (msg) => draw(msg.decoded))
@@ -48,7 +48,7 @@ allocator's quality, so it shrinks when the link is squeezed, or the file itself
 quality is 1) or `"png"` (lossless). The page gets the file in `msg.bytes` (`createImageBitmap(new Blob([msg.bytes]))`
 gives its pixels). Depth, point clouds and audio take no options.
 
-To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_web::MessageEncoding` impl named after
+To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_gateway::MessageEncoding` impl named after
 the file, listed in `src/codecs/msgs/mod.rs` and `codecs::all()` (a test checks every file is registered). Shared
 pieces are in `src/utils/`: the CDR and LCM readers, image decoders (`jpeg`, `png`, `webp`, `jxl`,
 `raw_pixels`, `compressed_image`), `pcm`, `depth` and `pointcloud`.
@@ -58,7 +58,7 @@ Inputs:
   the 4-byte encapsulation header (little or big endian honored).
 - dimos over zenoh: key `<topic>/<msg_name>` (e.g. `dimos/camera/color/sensor_msgs.Image`), payload in
   the dimos message format (big endian) with its 8-byte type fingerprint, which the codec checks (a
-  wrong type is an error, counted in zenoh-web's `codecErrors` / `lastCodecError` stats).
+  wrong type is an error, counted in zenoh-gateway's `codecErrors` / `lastCodecError` stats).
 - mono16 is ambiguous (IR intensity or depth-like); the subscriber decides: `*_image` shows its top
   8 bits as gray video, `*_depth` delivers it losslessly with encoding `mono16`.
 - Decoders are pure Rust (zune-jpeg, png, image-webp, jxl-oxide). A YCbCr JPEG with
@@ -80,9 +80,9 @@ u8 over the message's min..max (`intensityMin`, `intensityScale`). `positions` i
 
 ## Hardware encoders
 
-`zenoh_dimos_codecs::encoders`: hardware H.264 encoders as zenoh-web `VideoEncoder`s for
-`ServerBuilder::video_encoder` (formerly the zenoh-web-encoders crate). [zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)
-and [zenoh-web-relay](https://github.com/jeff-hykin/zenoh-web-relay) use them (`--video-encoder auto|software|videotoolbox|gstreamer`).
+`zenoh_dimos_codecs::encoders`: hardware H.264 encoders as zenoh-gateway `VideoEncoder`s for
+`ServerBuilder::video_encoder` (formerly the zenoh-web-encoders crate). [zenoh-gateway-cli](https://github.com/jeff-hykin/zenoh-gateway-cli)
+and [zenoh-gateway-relay](https://github.com/jeff-hykin/zenoh-gateway-relay) use them (`--video-encoder auto|software|videotoolbox|gstreamer`).
 
 | feature | backend | needs |
 |---|---|---|
@@ -96,7 +96,7 @@ zenoh-dimos-codecs = { git = "https://github.com/jeff-hykin/zenoh-dimos-codecs",
 ```rust
 let selected = zenoh_dimos_codecs::encoders::select(zenoh_dimos_codecs::encoders::Backend::Auto)?;
 if let Some(factory) = selected.factory {
-    builder = builder.video_encoder(factory); // else zenoh-web's software H.264
+    builder = builder.video_encoder(factory); // else zenoh-gateway's software H.264
 }
 ```
 
@@ -104,12 +104,12 @@ if let Some(factory) = selected.factory {
   software. A named backend that doesn't work is an error.
 - Each encoder is wrapped in `Fallback`: after its first error it hands over to openh264 for good (a new software
   encoder starts with a keyframe).
-- All of them encode at the bitrate zenoh-web grants (changed in place, no keyframe), restart on a new picture size,
-  give keyframes on request, and signal zenoh-web's colors (BT.601 matrix, BT.709 primaries and transfer).
+- All of them encode at the bitrate zenoh-gateway grants (changed in place, no keyframe), restart on a new picture size,
+  give keyframes on request, and signal zenoh-gateway's colors (BT.601 matrix, BT.709 primaries and transfer).
 - `examples/encode_file.rs` encodes raw RGB frames (or a moving test pattern) with any backend to an `.h264` file, to
   try an encoder on a machine and measure it offline.
 
-Measured on the zenoh-web bench scene (720p60, offline, decoded by ffmpeg): VideoToolbox 3.95 Mbit/s → 29.34 dB,
+Measured on the zenoh-gateway bench scene (720p60, offline, decoded by ffmpeg): VideoToolbox 3.95 Mbit/s → 29.34 dB,
 8.2 → 29.68, 15.4 → 29.90; openh264 4.0 → 29.37, 8.3 → 29.68, 16.2 → 29.88. Same quality per bit, but on the media
 engine instead of a core per stream.
 
@@ -119,7 +119,7 @@ scene at 16.6 Mbit/s against openh264's 29.57.
 
 ## Wire formats
 
-Both are zenoh-web fields messages (zenoh-web SPEC "Fields"), zstd-compressed by default
+Both are zenoh-gateway fields messages (zenoh-gateway SPEC "Fields"), zstd-compressed by default
 (`Codec::default_compress`; a subscription's `compress: "none"` turns it off). The client decodes them
 into `msg.decoded`:
 
@@ -134,11 +134,11 @@ into `msg.decoded`:
 `nix build .#zenoh-dimos-codecs-example` (native) and `.#zenoh-dimos-codecs-example-aarch64-linux` /
 `-x86_64-linux` build `nix_smoke_test/` with both encoder features: `zenoh-dimos-codecs-example [auto|software|videotoolbox|gstreamer] [frames]`
 lists the codecs, starts and stops a loopback server with them, then selects an encoder and times it on a 720p test
-pattern. Built with zenoh-web's `lib.crossRust`: crate2nix, one derivation per crate shared with the other zenoh-web
+pattern. Built with zenoh-gateway's `lib.crossRust`: crate2nix, one derivation per crate shared with the other zenoh-gateway
 flakes, Linux cross compiled with zig (glibc 2.35). GStreamer is opened at runtime, so the Linux builds need no
 GStreamer and the feature is always compiled in. Pass `--max-jobs auto`. After changing `nix_smoke_test/Cargo.lock`,
-`nix run github:jeff-hykin/zenoh-web#crate2nix -- generate` in `nix_smoke_test/`. To build your own crate that uses this one,
-see zenoh-web's README "Nix / cross compiling".
+`nix run github:jeff-hykin/zenoh-gateway#crate2nix -- generate` in `nix_smoke_test/`. To build your own crate that uses this one,
+see zenoh-gateway's README "Nix / cross compiling".
 
 ## Tests
 
@@ -147,5 +147,5 @@ cargo test && cargo clippy --all-targets   # parsers, decoders, encoders against
 ```
 
 `test/fixtures/` holds one payload per message (made by dimos's own encoder and by rosbags;
-`generate.py` rebuilds them, `manifest.json` describes them). zenoh-web-cli's `test/codecs.js` sends
+`generate.py` rebuilds them, `manifest.json` describes them). zenoh-gateway-cli's `test/codecs.js` sends
 every fixture through every codec into headless Chrome.

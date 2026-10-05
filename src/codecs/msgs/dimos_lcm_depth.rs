@@ -1,9 +1,9 @@
-//! `sensor_msgs/Image` depth (16UC1, 32FC1, mono16) from dimos (LCM over zenoh), lossless on a data channel as zenoh-web fields.
+//! `sensor_msgs/Image` depth (16UC1, 32FC1, mono16) from dimos (LCM over zenoh), lossless on a data channel as zenoh-gateway fields.
 
 use super::dimos_lcm_image;
 use crate::utils::depth;
 use anyhow::Result;
-use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// `dimos_lcm_depth`
 pub struct DimosLcmDepth;

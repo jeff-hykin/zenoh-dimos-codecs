@@ -5,7 +5,7 @@ use crate::utils::raw_pixels::Rgb8;
 use crate::utils::{jpeg, jxl, png, webp};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
-use zenoh_web::{Channel, EncodeOptions, EncodingOutput, VideoImage};
+use zenoh_gateway::{Channel, EncodeOptions, EncodingOutput, VideoImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileFormat {
@@ -65,7 +65,7 @@ impl FileWanted {
     }
 }
 
-/// [`MessageEncoding::output_on`](zenoh_web::MessageEncoding::output_on) for a picture encoding: pictures on any video
+/// [`MessageEncoding::output_on`](zenoh_gateway::MessageEncoding::output_on) for a picture encoding: pictures on any video
 /// channel (no options), files on the data channel ([`FileWanted`]).
 pub fn output_on(name: &str, channel: Channel, options: &Map<String, Value>, passthrough_default: bool) -> Result<EncodingOutput, String> {
     match channel {
@@ -169,8 +169,8 @@ mod tests {
         assert!(FileWanted::from_options(&serde_json::from_value(serde_json::json!({"format": "gif"})).unwrap(), true).is_err());
         assert!(FileWanted::from_options(&serde_json::from_value(serde_json::json!({"format": "passthrough"})).unwrap(), false).is_err(), "raw images have no file to pass");
         assert!(FileWanted::from_options(&serde_json::from_value(serde_json::json!({"size": 2})).unwrap(), true).is_err());
-        assert!(output_on("x", Channel::Video(zenoh_web::VideoFormat::Av1), &Map::new(), true).is_ok());
-        assert!(output_on("x", Channel::Video(zenoh_web::VideoFormat::H264), &serde_json::from_value(serde_json::json!({"format": "png"})).unwrap(), true).is_err());
+        assert!(output_on("x", Channel::Video(zenoh_gateway::VideoFormat::Av1), &Map::new(), true).is_ok());
+        assert!(output_on("x", Channel::Video(zenoh_gateway::VideoFormat::H264), &serde_json::from_value(serde_json::json!({"format": "png"})).unwrap(), true).is_err());
     }
 
     type Parse = fn(&[u8]) -> Result<CompressedImage<'_>>;

@@ -1,10 +1,10 @@
-//! zenoh-dimos-codecs: [zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2
-//! (rmw_zenoh, CDR) and dimos (LCM) sensor messages, implemented through zenoh-web's public
-//! [`MessageEncoding`](zenoh_web::MessageEncoding) trait like any external one.
+//! zenoh-dimos-codecs: [zenoh-gateway](https://github.com/jeff-hykin/zenoh-gateway) codecs for ROS 2
+//! (rmw_zenoh, CDR) and dimos (LCM) sensor messages, implemented through zenoh-gateway's public
+//! [`MessageEncoding`](zenoh_gateway::MessageEncoding) trait like any external one.
 //!
 //! ```no_run
 //! # async fn run() -> anyhow::Result<()> {
-//! let mut builder = zenoh_web::Server::builder();
+//! let mut builder = zenoh_gateway::Server::builder();
 //! for codec in zenoh_dimos_codecs::all() {
 //!     builder = builder.shared_encoding(codec);
 //! }
@@ -16,16 +16,16 @@
 //! One codec per message type, in [`codecs::msgs`] (e.g. [`codecs::msgs::Ros2CompressedImage`]); the input type
 //! decides the output:
 //! - `*_image`, `*_compressed_image`: color/mono images, H.264 on a WebRTC video track
-//! - `*_depth`, `*_compressed_depth`: lossless depth (u16/f32) as zenoh-web fields
-//! - `*_pointcloud2`: thinned (every Nth point) + int16 quantized points as zenoh-web fields
+//! - `*_depth`, `*_compressed_depth`: lossless depth (u16/f32) as zenoh-gateway fields
+//! - `*_pointcloud2`: thinned (every Nth point) + int16 quantized points as zenoh-gateway fields
 //! - `*_raw_audio`: `pcm-s16` audio blocks, Opus on a WebRTC audio track
 //!
-//! Depth and point clouds are zstd-compressed by default ([`MessageEncoding::default_compress`](zenoh_web::MessageEncoding::default_compress)); zenoh-web's
+//! Depth and point clouds are zstd-compressed by default ([`MessageEncoding::default_compress`](zenoh_gateway::MessageEncoding::default_compress)); zenoh-gateway's
 //! client decodes them into `msg.decoded` with no codec code in the page.
 
 pub mod codecs;
 /// Hardware H.264 encoders (features `videotoolbox`, `gstreamer`) with a fallback to software, for
-/// [`ServerBuilder::video_encoder`](zenoh_web::ServerBuilder::video_encoder).
+/// [`ServerBuilder::video_encoder`](zenoh_gateway::ServerBuilder::video_encoder).
 pub mod encoders;
 /// What the codecs share: wire readers (CDR, LCM), image decoders (JPEG, PNG, WebP, JPEG XL, raw pixels), and the
 /// depth and point-cloud encodings.

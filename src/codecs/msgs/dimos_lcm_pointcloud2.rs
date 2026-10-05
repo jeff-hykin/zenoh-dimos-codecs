@@ -1,9 +1,9 @@
-//! `sensor_msgs/PointCloud2` from dimos (LCM over zenoh), thinned and int16-quantized on a data channel as zenoh-web fields.
+//! `sensor_msgs/PointCloud2` from dimos (LCM over zenoh), thinned and int16-quantized on a data channel as zenoh-gateway fields.
 
 use super::{PointCloud, PointField};
 use crate::utils::{lcm::Lcm, pointcloud};
 use anyhow::{Result, ensure};
-use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_POINT_CLOUD2: [u8; 8] = [0xf5, 0xeb, 0x3d, 0xa1, 0xc2, 0x85, 0x31, 0x75];

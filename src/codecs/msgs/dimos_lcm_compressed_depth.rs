@@ -1,10 +1,10 @@
 //! `sensor_msgs/CompressedImage` depth (16-bit PNG or JPEG XL, also ROS `compressedDepth`) from dimos (LCM over zenoh), lossless on a
-//! data channel as zenoh-web fields.
+//! data channel as zenoh-gateway fields.
 
 use super::dimos_lcm_compressed_image;
 use crate::utils::depth;
 use anyhow::Result;
-use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// `dimos_lcm_compressed_depth`
 pub struct DimosLcmCompressedDepth;

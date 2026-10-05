@@ -3,9 +3,9 @@
 pub mod msgs;
 
 use std::sync::Arc;
-use zenoh_web::MessageEncoding;
+use zenoh_gateway::MessageEncoding;
 
-/// Every codec, ready for `zenoh_web::ServerBuilder::shared_encoding`.
+/// Every codec, ready for `zenoh_gateway::ServerBuilder::shared_encoding`.
 pub fn all() -> Vec<Arc<dyn MessageEncoding>> {
     use msgs::*;
     vec![
@@ -27,13 +27,13 @@ pub fn all() -> Vec<Arc<dyn MessageEncoding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenoh_web::{Channel, Compress, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, VideoFormat};
+    use zenoh_gateway::{Channel, Compress, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, VideoFormat};
     use crate::utils::tests::fixture;
 
     fn decode_and_encode(name: &str, file: &str, quality: f64) -> Vec<u8> {
         let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
         let payload = fixture(file);
-        let encoding = zenoh_web::zenoh::bytes::Encoding::default();
+        let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
         let frame = codec.decode(&EncodingSample::new("k", &payload, &encoding), Channel::Data).unwrap();
         codec.encode(&frame, &EncodeOptions::quality(quality)).unwrap()
     }
@@ -51,7 +51,7 @@ mod tests {
         registered.sort();
         assert_eq!(registered, files, "every file in codecs/msgs is registered, under its file name");
         assert!(all().iter().all(|codec| (codec.default_compress() == Compress::Zstd) == (codec.output() == EncodingOutput::Fields)), "depth and point clouds stay compressed");
-        let fields = |name: &str, file: &str, quality: f64| zenoh_web::fields::parse(&decode_and_encode(name, file, quality)).unwrap();
+        let fields = |name: &str, file: &str, quality: f64| zenoh_gateway::fields::parse(&decode_and_encode(name, file, quality)).unwrap();
         let depth = fields("ros2_depth", "ros2/depth_16UC1.cdr", 1.0);
         assert_eq!((depth["version"].values(), depth["encoding"].text()), (vec![2.0], Some("16UC1")));
         assert_eq!(fields("dimos_lcm_depth", "dimos/depth_16UC1.bin", 0.5)["stride"].values(), [2.0], "stride 2 at quality 0.5");
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!((cloud["version"].values(), cloud["count"].values()), (vec![3.0], vec![20000.0]));
         let codec = all().into_iter().find(|codec| codec.name() == "dimos_lcm_image").unwrap();
         let payload = fixture("dimos/image_rgb8.bin");
-        let encoding = zenoh_web::zenoh::bytes::Encoding::default();
+        let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
         let DecodedFrame::Video(image) = codec.decode(&EncodingSample::new("k", &payload, &encoding), Channel::Video(VideoFormat::H264)).unwrap() else { panic!("video expected") };
         assert_eq!((image.width(), image.height()), (320, 240));
     }
@@ -70,7 +70,7 @@ mod tests {
         let options: serde_json::Map<String, serde_json::Value> = serde_json::from_value(options).unwrap();
         assert_eq!(codec.output_on(Channel::Data, &options)?, EncodingOutput::Data);
         let payload = fixture(file);
-        let encoding = zenoh_web::zenoh::bytes::Encoding::default();
+        let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
         let frame = codec.decode(&EncodingSample::new("k", &payload, &encoding), Channel::Data).map_err(|error| error.to_string())?;
         codec.encode(&frame, &EncodeOptions { quality, options }).map_err(|error| error.to_string())
     }

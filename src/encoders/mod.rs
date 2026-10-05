@@ -1,5 +1,5 @@
-//! Hardware video encoders for [zenoh-web](https://github.com/jeff-hykin/zenoh-web), as [`VideoEncoder`]s for
-//! [`ServerBuilder::video_encoder`](zenoh_web::ServerBuilder::video_encoder):
+//! Hardware video encoders for [zenoh-gateway](https://github.com/jeff-hykin/zenoh-gateway), as [`VideoEncoder`]s for
+//! [`ServerBuilder::video_encoder`](zenoh_gateway::ServerBuilder::video_encoder):
 //! - `videotoolbox` (feature): macOS VideoToolbox, the Mac's media engine;
 //! - `gstreamer` (feature): a GStreamer hardware encoder found at runtime, `nvv4l2h264enc` (Jetson), `nvh264enc`
 //!   (NVENC) or `vah264enc` / `vaapih264enc` (VAAPI).
@@ -10,7 +10,7 @@
 //! ```no_run
 //! # async fn run() -> anyhow::Result<()> {
 //! let selected = zenoh_dimos_codecs::encoders::select(zenoh_dimos_codecs::encoders::Backend::Auto)?;
-//! let mut builder = zenoh_web::Server::builder();
+//! let mut builder = zenoh_gateway::Server::builder();
 //! if let Some(factory) = selected.factory {
 //!     builder = builder.video_encoder(factory);
 //! }
@@ -26,14 +26,14 @@ pub mod videotoolbox;
 
 use anyhow::{Result, bail};
 use std::str::FromStr;
-use zenoh_web::{DecodedFrame, EncodedVideo, H264Encoder, VideoEncoder, VideoFormat, VideoTarget};
+use zenoh_gateway::{DecodedFrame, EncodedVideo, H264Encoder, VideoEncoder, VideoFormat, VideoTarget};
 
 /// Which encoder to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     /// The first hardware one that works (VideoToolbox, then GStreamer), else software.
     Auto,
-    /// openh264 (zenoh-web's own).
+    /// openh264 (zenoh-gateway's own).
     Software,
     /// macOS VideoToolbox.
     VideoToolbox,
@@ -62,7 +62,7 @@ pub type Factory = Box<dyn Fn() -> Box<dyn VideoEncoder> + Send + Sync>;
 pub struct Selected {
     /// e.g. `"videotoolbox"`, `"gstreamer nvv4l2h264enc"`, `"software"`
     pub name: String,
-    /// `None` for software: zenoh-web's default.
+    /// `None` for software: zenoh-gateway's default.
     pub factory: Option<Factory>,
 }
 
@@ -95,7 +95,7 @@ fn probe(backend: Backend) -> Result<Selected> {
         #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
         Backend::VideoToolbox => {
             let mut encoder = videotoolbox::VideoToolboxEncoder::default();
-            let image = zenoh_web::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
+            let image = zenoh_gateway::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
             encoder.encode(&DecodedFrame::Video(image), &VideoTarget::new(320, 240, 1_000_000, 30.0))?;
             Ok(Selected { name: "videotoolbox".into(), factory: Some(Box::new(|| Box::new(Fallback::new("videotoolbox", videotoolbox::VideoToolboxEncoder::default())))) })
         }
@@ -152,7 +152,7 @@ impl<E: VideoEncoder> VideoEncoder for Fallback<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenoh_web::VideoImage;
+    use zenoh_gateway::VideoImage;
 
     /// Four solid quadrants: red, green / blue, white.
     fn quadrants(width: u32, height: u32) -> DecodedFrame {

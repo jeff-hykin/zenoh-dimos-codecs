@@ -3,7 +3,7 @@
 use crate::codecs::msgs::RawImage;
 use crate::utils::compressed_image;
 use anyhow::{Context, Result, bail, ensure};
-use zenoh_web::VideoImage;
+use zenoh_gateway::VideoImage;
 
 /// Packed 8-bit RGB, row-major, no padding.
 pub struct Rgb8 {

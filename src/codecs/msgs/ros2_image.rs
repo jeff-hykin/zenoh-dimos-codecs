@@ -6,7 +6,7 @@ use crate::utils::compressed_image;
 use crate::utils::{cdr::Cdr, raw_pixels};
 use anyhow::Result;
 use serde_json::{Map, Value};
-use zenoh_web::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
+use zenoh_gateway::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
 
 /// `ros2_image`
 pub struct Ros2Image;

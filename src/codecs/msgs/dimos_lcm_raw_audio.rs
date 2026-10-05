@@ -1,9 +1,9 @@
-//! `foxglove_msgs/RawAudio` from dimos (LCM over zenoh) as audio: `pcm-s16` blocks to PCM for zenoh-web's Opus track.
+//! `foxglove_msgs/RawAudio` from dimos (LCM over zenoh) as audio: `pcm-s16` blocks to PCM for zenoh-gateway's Opus track.
 
 use super::RawAudio;
 use crate::utils::{lcm::Lcm, pcm};
 use anyhow::Result;
-use zenoh_web::{MessageEncoding, Channel, EncodingOutput, EncodingSample, DecodedFrame};
+use zenoh_gateway::{MessageEncoding, Channel, EncodingOutput, EncodingSample, DecodedFrame};
 
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_RAW_AUDIO: [u8; 8] = [0x28, 0xe2, 0x3a, 0xc0, 0x24, 0xcb, 0x1c, 0x86];
