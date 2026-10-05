@@ -2,7 +2,7 @@
 
 [zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2 (rmw_zenoh) and dimos sensor
 messages: images as H.264 video, lossless depth and quantized point clouds, plus hardware H.264 encoders
-(see [Hardware encoders](#hardware-encoders)). A Rust crate of `zenoh_web::Codec`s and encoders: depth and point clouds are zenoh-web **fields**, which
+(see [Hardware encoders](#hardware-encoders)). A Rust crate of `zenoh_web::MessageEncoding`s and encoders: depth and point clouds are zenoh-web **fields**, which
 zenoh-web's own browser client decodes, so pages need no code from here. The `zenoh-web` command
 ([zenoh-web-cli](https://github.com/jeff-hykin/zenoh-web-cli)) has them all.
 
@@ -14,15 +14,18 @@ zenoh-dimos-codecs = { git = "https://github.com/jeff-hykin/zenoh-dimos-codecs",
 ```rust
 let mut builder = zenoh_web::Server::builder();
 for codec in zenoh_dimos_codecs::all() {
-    builder = builder.shared_codec(codec);
+    builder = builder.shared_encoding(codec);
 }
 ```
 
 ```js
 import { connect } from "https://esm.sh/gh/jeff-hykin/zenoh-web@<commit>/client/zenoh_web.ts"
 const z = await connect("http://robot.local:7448")
-z.codecs   // [{ name: "dimos_lcm_depth", output: "fields" }, { name: "dimos_lcm_image", output: "video" }, ...]
-z.subscribe("dimos/camera/depth/sensor_msgs.Image", { codec: "dimos_lcm_depth" }, (msg) => draw(msg.decoded))
+z.encodings   // [{ name: "dimos_lcm_depth", output: "fields" }, { name: "dimos_lcm_image", output: "video" }, ...]
+z.subscribe("dimos/camera/depth/sensor_msgs.Image", { encoding: "dimos_lcm_depth" }, (msg) => draw(msg.decoded))
+// a compressed image as a JPEG file on the data channel (converted from PNG if need be), smaller when squeezed:
+z.subscribe("camera/sensor_msgs.CompressedImage", { encoding: "dimos_lcm_compressed_image", channel: "data", encodeOptions: { format: "jpeg", quality: 0.8 } },
+    async (msg) => draw(await createImageBitmap(new Blob([msg.bytes]))))
 ```
 
 ## Codecs
@@ -39,7 +42,13 @@ One file per message type in [`src/codecs/msgs/`](src/codecs/msgs), and the code
 | `ros2_pointcloud2`, `dimos_lcm_pointcloud2` | `sensor_msgs/PointCloud2`, any field layout | quantized points: `msg.decoded` is a point cloud (below) |
 | `ros2_raw_audio`, `dimos_lcm_raw_audio` | `foxglove_msgs/RawAudio`: `pcm-s16`, any rate (resampled to 48 kHz unless Opus takes it), the first 2 channels | Opus audio track (`sub.mediaStream`) |
 
-To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_web::Codec` impl named after
+Image encodings also go on the data channel (`channel: "data"`), as a file, with `encodeOptions.format`:
+`"passthrough"` (compressed images' default: the file as sent), `"jpeg"` (raw images' default; re-encoded at the
+allocator's quality, so it shrinks when the link is squeezed, or the file itself when it already is a JPEG and the
+quality is 1) or `"png"` (lossless). The page gets the file in `msg.bytes` (`createImageBitmap(new Blob([msg.bytes]))`
+gives its pixels). Depth, point clouds and audio take no options.
+
+To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_web::MessageEncoding` impl named after
 the file, listed in `src/codecs/msgs/mod.rs` and `codecs::all()` (a test checks every file is registered). Shared
 pieces are in `src/utils/`: the CDR and LCM readers, image decoders (`jpeg`, `png`, `webp`, `jxl`,
 `raw_pixels`, `compressed_image`), `pcm`, `depth` and `pointcloud`.

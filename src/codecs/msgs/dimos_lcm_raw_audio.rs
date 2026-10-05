@@ -3,7 +3,7 @@
 use super::RawAudio;
 use crate::utils::{lcm::Lcm, pcm};
 use anyhow::Result;
-use zenoh_web::{Codec, CodecOutput, CodecSample, DecodedFrame};
+use zenoh_web::{MessageEncoding, Channel, EncodingOutput, EncodingSample, DecodedFrame};
 
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_RAW_AUDIO: [u8; 8] = [0x28, 0xe2, 0x3a, 0xc0, 0x24, 0xcb, 0x1c, 0x86];
@@ -24,16 +24,16 @@ pub fn parse(payload: &[u8]) -> Result<RawAudio<'_>> {
     Ok(RawAudio { data, format, sample_rate, channels })
 }
 
-impl Codec for DimosLcmRawAudio {
+impl MessageEncoding for DimosLcmRawAudio {
     fn name(&self) -> &str {
         "dimos_lcm_raw_audio"
     }
 
-    fn output(&self) -> CodecOutput {
-        CodecOutput::Audio
+    fn output(&self) -> EncodingOutput {
+        EncodingOutput::Audio
     }
 
-    fn decode(&self, sample: &CodecSample<'_>) -> Result<DecodedFrame> {
+    fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {
         let audio = parse(sample.payload)?;
         Ok(DecodedFrame::Audio(pcm::s16_to_pcm(audio.data, &audio.format, audio.sample_rate, audio.channels)?))
     }

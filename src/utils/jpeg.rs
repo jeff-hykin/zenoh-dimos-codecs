@@ -1,8 +1,17 @@
-//! JPEG decoding (zune-jpeg): to RGB8, or a YCbCr JPEG straight to I420 for the video path.
+//! JPEG decoding (zune-jpeg): to RGB8, or a YCbCr JPEG straight to I420 for the video path; and encoding (jpeg-encoder).
 
 use crate::utils::raw_pixels::{Rgb8, samples_to_rgb};
 use anyhow::{Context, Result, ensure};
 use zenoh_web::VideoImage;
+
+/// RGB8 as a JPEG at `quality` (0..1 → JPEG quality 20..95).
+pub fn encode(image: &Rgb8, quality: f64) -> Result<Vec<u8>> {
+    let (width, height) = (u16::try_from(image.width).context("jpeg: wider than 65535")?, u16::try_from(image.height).context("jpeg: taller than 65535")?);
+    let mut out = Vec::new();
+    let jpeg_quality = (20.0 + 75.0 * quality.clamp(0.0, 1.0)).round() as u8;
+    jpeg_encoder::Encoder::new(&mut out, jpeg_quality).encode(&image.pixels, width, height, jpeg_encoder::ColorType::Rgb).map_err(|e| anyhow::anyhow!("jpeg: {e}"))?;
+    Ok(out)
+}
 
 /// A JPEG as RGB8.
 pub fn to_rgb(data: &[u8]) -> Result<Rgb8> {

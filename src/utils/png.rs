@@ -1,4 +1,4 @@
-//! PNG decoding (the png crate).
+//! PNG decoding and encoding (the png crate).
 
 use crate::utils::raw_pixels::{Rgb8, samples_to_rgb};
 use anyhow::{Context, Result, ensure};
@@ -8,6 +8,17 @@ use std::io::Cursor;
 pub fn to_rgb(data: &[u8]) -> Result<Rgb8> {
     let (info, samples) = decode(data, png::Transformations::EXPAND | png::Transformations::STRIP_16)?;
     samples_to_rgb(&samples, info.color_type.samples(), info.width, info.height)
+}
+
+/// RGB8 as a PNG (lossless; fast compression).
+pub fn encode(image: &Rgb8) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, image.width, image.height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.write_header().map_err(|e| anyhow::anyhow!("png: {e}"))?.write_image_data(&image.pixels).map_err(|e| anyhow::anyhow!("png: {e}"))?;
+    Ok(out)
 }
 
 /// A 16-bit grayscale PNG as its u16 values (width, height, values).

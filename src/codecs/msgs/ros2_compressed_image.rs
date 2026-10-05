@@ -1,10 +1,12 @@
 //! `sensor_msgs/CompressedImage` from ROS 2 (rmw_zenoh, CDR) as video: a JPEG, PNG, WebP or JPEG XL file to a picture for the
-//! video encoder.
+//! video encoder; on the data channel, the file itself or converted (`encodeOptions.format`).
 
 use super::CompressedImage;
+use crate::utils::compressed_image::ImageFile;
 use crate::utils::{cdr::Cdr, compressed_image};
 use anyhow::Result;
-use zenoh_web::{Codec, CodecOutput, CodecSample, DecodedFrame};
+use serde_json::{Map, Value};
+use zenoh_web::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
 
 /// `ros2_compressed_image`
 pub struct Ros2CompressedImage;
@@ -18,18 +20,34 @@ pub fn parse(payload: &[u8]) -> Result<CompressedImage<'_>> {
     Ok(CompressedImage { format, data })
 }
 
-impl Codec for Ros2CompressedImage {
+impl MessageEncoding for Ros2CompressedImage {
     fn name(&self) -> &str {
         "ros2_compressed_image"
     }
 
-    fn output(&self) -> CodecOutput {
-        CodecOutput::Video
+    fn output(&self) -> EncodingOutput {
+        EncodingOutput::Video
     }
 
-    fn decode(&self, sample: &CodecSample<'_>) -> Result<DecodedFrame> {
+    /// Video channels: no options. Data: `{format}`, `"passthrough"` (default, the file as sent), `"jpeg"` or `"png"`.
+    fn output_on(&self, channel: Channel, options: &Map<String, Value>) -> Result<EncodingOutput, String> {
+        compressed_image::output_on(self.name(), channel, options, true)
+    }
+
+    fn decode(&self, sample: &EncodingSample<'_>, channel: Channel) -> Result<DecodedFrame> {
         let message = parse(sample.payload)?;
-        Ok(DecodedFrame::Video(compressed_image::to_video(message.data, &message.format)?))
+        Ok(match channel {
+            Channel::Data => DecodedFrame::data(ImageFile::new(message.data, &message.format)?),
+            _ => DecodedFrame::Video(compressed_image::to_video(message.data, &message.format)?),
+        })
+    }
+
+    fn encode(&self, frame: &DecodedFrame, options: &EncodeOptions) -> Result<Vec<u8>> {
+        frame.downcast::<ImageFile>()?.encode(options)
+    }
+
+    fn estimated_bytes(&self, payload_bytes: usize, options: &EncodeOptions) -> f64 {
+        compressed_image::estimated_bytes(payload_bytes, options, true)
     }
 }
 

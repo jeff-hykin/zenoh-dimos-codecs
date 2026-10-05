@@ -1,12 +1,12 @@
 //! zenoh-dimos-codecs: [zenoh-web](https://github.com/jeff-hykin/zenoh-web) codecs for ROS 2
 //! (rmw_zenoh, CDR) and dimos (LCM) sensor messages, implemented through zenoh-web's public
-//! [`Codec`] trait like any external codec.
+//! [`MessageEncoding`](zenoh_web::MessageEncoding) trait like any external one.
 //!
 //! ```no_run
 //! # async fn run() -> anyhow::Result<()> {
 //! let mut builder = zenoh_web::Server::builder();
 //! for codec in zenoh_dimos_codecs::all() {
-//!     builder = builder.shared_codec(codec);
+//!     builder = builder.shared_encoding(codec);
 //! }
 //! let server = builder.build().await?;
 //! # Ok(())
@@ -20,7 +20,7 @@
 //! - `*_pointcloud2`: thinned (every Nth point) + int16 quantized points as zenoh-web fields
 //! - `*_raw_audio`: `pcm-s16` audio blocks, Opus on a WebRTC audio track
 //!
-//! Depth and point clouds are zstd-compressed by default ([`Codec::default_compress`]); zenoh-web's
+//! Depth and point clouds are zstd-compressed by default ([`MessageEncoding::default_compress`](zenoh_web::MessageEncoding::default_compress)); zenoh-web's
 //! client decodes them into `msg.decoded` with no codec code in the page.
 
 pub mod codecs;

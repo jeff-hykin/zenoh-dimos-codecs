@@ -1,10 +1,12 @@
 //! `sensor_msgs/Image` from dimos (LCM over zenoh) as video: raw pixels (rgb8, bgr8, mono16, ...) or a file in the data field, to a
-//! picture for the video encoder.
+//! picture for the video encoder; on the data channel, a JPEG or PNG of it (`encodeOptions.format`).
 
 use super::RawImage;
+use crate::utils::compressed_image;
 use crate::utils::{lcm::Lcm, raw_pixels};
 use anyhow::Result;
-use zenoh_web::{Codec, CodecOutput, CodecSample, DecodedFrame};
+use serde_json::{Map, Value};
+use zenoh_web::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
 
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_IMAGE: [u8; 8] = [0x53, 0x5c, 0xfa, 0xce, 0x1f, 0x4f, 0x57, 0x17];
@@ -26,17 +28,35 @@ pub fn parse(payload: &[u8]) -> Result<RawImage<'_>> {
     Ok(RawImage { width, height, encoding, big_endian, step, data })
 }
 
-impl Codec for DimosLcmImage {
+impl MessageEncoding for DimosLcmImage {
     fn name(&self) -> &str {
         "dimos_lcm_image"
     }
 
-    fn output(&self) -> CodecOutput {
-        CodecOutput::Video
+    fn output(&self) -> EncodingOutput {
+        EncodingOutput::Video
     }
 
-    fn decode(&self, sample: &CodecSample<'_>) -> Result<DecodedFrame> {
-        Ok(DecodedFrame::Video(raw_pixels::to_video(&parse(sample.payload)?)?))
+    /// Video channels: no options. Data: `{format}`, `"jpeg"` (default, at the allocator's quality) or `"png"`.
+    fn output_on(&self, channel: Channel, options: &Map<String, Value>) -> Result<EncodingOutput, String> {
+        compressed_image::output_on(self.name(), channel, options, false)
+    }
+
+    fn decode(&self, sample: &EncodingSample<'_>, channel: Channel) -> Result<DecodedFrame> {
+        let image = parse(sample.payload)?;
+        Ok(match channel {
+            Channel::Data => DecodedFrame::data(raw_pixels::to_rgb(&image)?),
+            _ => DecodedFrame::Video(raw_pixels::to_video(&image)?),
+        })
+    }
+
+    fn encode(&self, frame: &DecodedFrame, options: &EncodeOptions) -> Result<Vec<u8>> {
+        compressed_image::encode_rgb(frame.downcast::<raw_pixels::Rgb8>()?, options)
+    }
+
+    fn estimated_bytes(&self, payload_bytes: usize, options: &EncodeOptions) -> f64 {
+        // a JPEG of raw pixels is a tenth of them or less
+        compressed_image::estimated_bytes(payload_bytes, options, false) * 0.1
     }
 }
 

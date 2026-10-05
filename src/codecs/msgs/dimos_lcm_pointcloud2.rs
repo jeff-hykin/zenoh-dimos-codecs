@@ -3,7 +3,7 @@
 use super::{PointCloud, PointField};
 use crate::utils::{lcm::Lcm, pointcloud};
 use anyhow::{Result, ensure};
-use zenoh_web::{Codec, CodecOutput, CodecSample, Compress, DecodedFrame};
+use zenoh_web::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, EncodingSample, Compress, DecodedFrame};
 
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_POINT_CLOUD2: [u8; 8] = [0xf5, 0xeb, 0x3d, 0xa1, 0xc2, 0x85, 0x31, 0x75];
@@ -35,29 +35,29 @@ pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     Ok(PointCloud { height, width, fields, big_endian, point_step, row_step, data })
 }
 
-impl Codec for DimosLcmPointCloud2 {
+impl MessageEncoding for DimosLcmPointCloud2 {
     fn name(&self) -> &str {
         "dimos_lcm_pointcloud2"
     }
 
-    fn output(&self) -> CodecOutput {
-        CodecOutput::Fields
+    fn output(&self) -> EncodingOutput {
+        EncodingOutput::Fields
     }
 
     fn default_compress(&self) -> Compress {
         Compress::Zstd
     }
 
-    fn decode(&self, sample: &CodecSample<'_>) -> Result<DecodedFrame> {
+    fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {
         Ok(DecodedFrame::data(pointcloud::read_points(&parse(sample.payload)?)?))
     }
 
-    fn encode(&self, frame: &DecodedFrame, quality: f64) -> Result<Vec<u8>> {
-        Ok(pointcloud::encode_points(frame.downcast::<pointcloud::Points>()?, quality))
+    fn encode(&self, frame: &DecodedFrame, options: &EncodeOptions) -> Result<Vec<u8>> {
+        Ok(pointcloud::encode_points(frame.downcast::<pointcloud::Points>()?, options.quality))
     }
 
-    fn estimated_bytes(&self, payload_bytes: usize, quality: f64) -> f64 {
-        pointcloud::estimated_bytes(payload_bytes, quality)
+    fn estimated_bytes(&self, payload_bytes: usize, options: &EncodeOptions) -> f64 {
+        pointcloud::estimated_bytes(payload_bytes, options.quality)
     }
 }
 

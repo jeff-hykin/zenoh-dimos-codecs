@@ -1,10 +1,12 @@
 //! `sensor_msgs/Image` from ROS 2 (rmw_zenoh, CDR) as video: raw pixels (rgb8, bgr8, mono16, ...) or a file in the data field, to a
-//! picture for the video encoder.
+//! picture for the video encoder; on the data channel, a JPEG or PNG of it (`encodeOptions.format`).
 
 use super::RawImage;
+use crate::utils::compressed_image;
 use crate::utils::{cdr::Cdr, raw_pixels};
 use anyhow::Result;
-use zenoh_web::{Codec, CodecOutput, CodecSample, DecodedFrame};
+use serde_json::{Map, Value};
+use zenoh_web::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, EncodingSample, MessageEncoding};
 
 /// `ros2_image`
 pub struct Ros2Image;
@@ -22,17 +24,35 @@ pub fn parse(payload: &[u8]) -> Result<RawImage<'_>> {
     Ok(RawImage { width, height, encoding, big_endian, step, data })
 }
 
-impl Codec for Ros2Image {
+impl MessageEncoding for Ros2Image {
     fn name(&self) -> &str {
         "ros2_image"
     }
 
-    fn output(&self) -> CodecOutput {
-        CodecOutput::Video
+    fn output(&self) -> EncodingOutput {
+        EncodingOutput::Video
     }
 
-    fn decode(&self, sample: &CodecSample<'_>) -> Result<DecodedFrame> {
-        Ok(DecodedFrame::Video(raw_pixels::to_video(&parse(sample.payload)?)?))
+    /// Video channels: no options. Data: `{format}`, `"jpeg"` (default, at the allocator's quality) or `"png"`.
+    fn output_on(&self, channel: Channel, options: &Map<String, Value>) -> Result<EncodingOutput, String> {
+        compressed_image::output_on(self.name(), channel, options, false)
+    }
+
+    fn decode(&self, sample: &EncodingSample<'_>, channel: Channel) -> Result<DecodedFrame> {
+        let image = parse(sample.payload)?;
+        Ok(match channel {
+            Channel::Data => DecodedFrame::data(raw_pixels::to_rgb(&image)?),
+            _ => DecodedFrame::Video(raw_pixels::to_video(&image)?),
+        })
+    }
+
+    fn encode(&self, frame: &DecodedFrame, options: &EncodeOptions) -> Result<Vec<u8>> {
+        compressed_image::encode_rgb(frame.downcast::<raw_pixels::Rgb8>()?, options)
+    }
+
+    fn estimated_bytes(&self, payload_bytes: usize, options: &EncodeOptions) -> f64 {
+        // a JPEG of raw pixels is a tenth of them or less
+        compressed_image::estimated_bytes(payload_bytes, options, false) * 0.1
     }
 }
 

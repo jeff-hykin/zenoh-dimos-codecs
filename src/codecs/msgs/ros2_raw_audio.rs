@@ -3,7 +3,7 @@
 use super::RawAudio;
 use crate::utils::{cdr::Cdr, pcm};
 use anyhow::Result;
-use zenoh_web::{Codec, CodecOutput, CodecSample, DecodedFrame};
+use zenoh_web::{MessageEncoding, Channel, EncodingOutput, EncodingSample, DecodedFrame};
 
 /// `ros2_raw_audio`
 pub struct Ros2RawAudio;
@@ -21,16 +21,16 @@ pub fn parse(payload: &[u8]) -> Result<RawAudio<'_>> {
     Ok(RawAudio { data, format, sample_rate, channels })
 }
 
-impl Codec for Ros2RawAudio {
+impl MessageEncoding for Ros2RawAudio {
     fn name(&self) -> &str {
         "ros2_raw_audio"
     }
 
-    fn output(&self) -> CodecOutput {
-        CodecOutput::Audio
+    fn output(&self) -> EncodingOutput {
+        EncodingOutput::Audio
     }
 
-    fn decode(&self, sample: &CodecSample<'_>) -> Result<DecodedFrame> {
+    fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {
         let audio = parse(sample.payload)?;
         Ok(DecodedFrame::Audio(pcm::s16_to_pcm(audio.data, &audio.format, audio.sample_rate, audio.channels)?))
     }

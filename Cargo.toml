@@ -1,6 +1,6 @@
 [package]
 name = "zenoh-dimos-codecs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "zenoh-web codecs for ROS 2 and dimos images, depth and point clouds, plus hardware H.264 encoders (macOS VideoToolbox, GStreamer: Jetson nvv4l2h264enc, NVENC, VAAPI) with a fallback to software"
@@ -19,13 +19,17 @@ videotoolbox = []
 gstreamer = ["dep:libloading"]
 
 [dependencies]
-zenoh-web = { version = "0.4.1", git = "https://github.com/jeff-hykin/zenoh-web", rev = "63b72ddd507fd31cd91dc1c3cc350336ebe08b89" }
+zenoh-web = { version = "0.5.0", git = "https://github.com/jeff-hykin/zenoh-web", rev = "63b72ddd507fd31cd91dc1c3cc350336ebe08b89" }
 anyhow = "1"
+# encodeOptions
+serde_json = "1"
 # pure Rust decoders
 zune-jpeg = "0.5"
 png = "0.18"
 image-webp = "0.2"
 jxl-oxide = "0.12"
+# encodeOptions.format "jpeg" on the data channel (pure Rust)
+jpeg-encoder = "0.7"
 # encoders
 log = "0.4"
 libloading = { version = "0.9", optional = true }
