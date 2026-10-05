@@ -116,12 +116,12 @@ into `msg.decoded`:
 ## Nix / cross compiling
 
 `nix build .#zenoh-dimos-codecs-example` (native) and `.#zenoh-dimos-codecs-example-aarch64-linux` /
-`-x86_64-linux` build `example/` with both encoder features: `zenoh-dimos-codecs-example [auto|software|videotoolbox|gstreamer] [frames]`
+`-x86_64-linux` build `nix_smoke_test/` with both encoder features: `zenoh-dimos-codecs-example [auto|software|videotoolbox|gstreamer] [frames]`
 lists the codecs, starts and stops a loopback server with them, then selects an encoder and times it on a 720p test
 pattern. Built with zenoh-web's `lib.crossRust`: crate2nix, one derivation per crate shared with the other zenoh-web
 flakes, Linux cross compiled with zig (glibc 2.35). GStreamer is opened at runtime, so the Linux builds need no
-GStreamer and the feature is always compiled in. Pass `--max-jobs auto`. After changing `example/Cargo.lock`,
-`nix run github:jeff-hykin/zenoh-web#crate2nix -- generate` in `example/`. To build your own crate that uses this one,
+GStreamer and the feature is always compiled in. Pass `--max-jobs auto`. After changing `nix_smoke_test/Cargo.lock`,
+`nix run github:jeff-hykin/zenoh-web#crate2nix -- generate` in `nix_smoke_test/`. To build your own crate that uses this one,
 see zenoh-web's README "Nix / cross compiling".
 
 ## Tests

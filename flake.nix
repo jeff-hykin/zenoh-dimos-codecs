@@ -5,9 +5,9 @@
     inputs.zenoh-web.url = "github:jeff-hykin/zenoh-web";
 
     outputs = { self, zenoh-web }: {
-        # the library through example/: a loopback server with every codec
+        # the library through nix_smoke_test/: a loopback server with every codec
         packages = zenoh-web.lib.eachSystem (system:
-            let built = zenoh-web.lib.crossRustPackages { name = "zenoh-dimos-codecs-example"; inherit system; cargoNix = ./example/Cargo.nix; };
+            let built = zenoh-web.lib.crossRustPackages { name = "zenoh-dimos-codecs-example"; inherit system; cargoNix = ./nix_smoke_test/Cargo.nix; };
             in built // { default = built.zenoh-dimos-codecs-example; });
         devShells = zenoh-web.devShells;
     };
