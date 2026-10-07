@@ -7,6 +7,10 @@ description = "Smoke test for the nix builds: a zenoh-gateway server with every 
 
 [dependencies]
 zenoh-dimos-codecs = { path = "..", features = ["videotoolbox", "gstreamer"] }
-zenoh-gateway = { version = "0.4.1", git = "https://github.com/jeff-hykin/zenoh-gateway", rev = "63b72ddd507fd31cd91dc1c3cc350336ebe08b89" }
+zenoh-gateway = "0.5.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
+
+[patch.crates-io]
+# zenoh 1.6.2 plus a routing fix: https://github.com/jeff-hykin/zenoh-vendor
+zenoh = { git = "https://github.com/jeff-hykin/zenoh-vendor", tag = "zenoh-1.6.2-patch.1" }
