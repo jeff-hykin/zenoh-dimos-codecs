@@ -4993,8 +4993,7 @@ dependencies = [
 [[package]]
 name = "zenoh"
 version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5df040795169d4b6e4fc8a5f9dce81b5210d1d606399634ec380deda30c347f"
+source = "git+https://github.com/jeff-hykin/zenoh-vendor?tag=zenoh-1.6.2-patch.1#3148154ba096252497a9c564375e0d4c8bf7b6e9"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -5136,7 +5135,7 @@ dependencies = [
  "openh264",
  "png",
  "serde_json",
- "zenoh-web",
+ "zenoh-gateway",
  "zune-jpeg",
 ]
 
@@ -5158,6 +5157,36 @@ dependencies = [
  "zenoh",
  "zenoh-macros",
  "zenoh-util",
+]
+
+[[package]]
+name = "zenoh-gateway"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2377ba36fd8e50edfa71b9dabc28dfa396245269fd5674a01b0fc0e0e8aebbd"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "hmac",
+ "log",
+ "openh264",
+ "openh264-sys2",
+ "rav1e",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tower-http",
+ "unsafe-libopus",
+ "zenoh",
+ "zenoh-ext",
+ "zenoh-web-rtc",
+ "zenoh-web-webrtc",
+ "zstd",
 ]
 
 [[package]]
@@ -5544,34 +5573,6 @@ dependencies = [
  "winapi",
  "zenoh-core",
  "zenoh-result",
-]
-
-[[package]]
-name = "zenoh-web"
-version = "0.5.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bytes",
- "futures",
- "hmac",
- "log",
- "openh264",
- "openh264-sys2",
- "rav1e",
- "serde",
- "serde_json",
- "sha1",
- "tokio",
- "tower-http",
- "unsafe-libopus",
- "zenoh",
- "zenoh-ext",
- "zenoh-web-rtc",
- "zenoh-web-webrtc",
- "zstd",
 ]
 
 [[package]]
