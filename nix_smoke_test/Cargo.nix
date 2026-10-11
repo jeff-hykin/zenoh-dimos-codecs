@@ -16347,7 +16347,7 @@ rec {
       };
       "zenoh-dimos-codecs" = rec {
         crateName = "zenoh-dimos-codecs";
-        version = "0.4.0";
+        version = "0.3.1";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../.; };
         libName = "zenoh_dimos_codecs";
@@ -16511,13 +16511,13 @@ rec {
       };
       "zenoh-gateway" = rec {
         crateName = "zenoh-gateway";
-        version = "0.6.0";
+        version = "0.5.4";
         edition = "2024";
         workspace_member = null;
         src = pkgs.fetchgit {
           url = "https://github.com/jeff-hykin/zenoh-gateway";
-          rev = "df51a8e62d69b801a46438b1fbd143b7533f1017";
-          sha256 = "14zvhqx3bma9f40zwkiflhsdml4r3wxvsv12lf5giaqjvskkxkll";
+          rev = "dce65a3cc2a5f250da80a194d0c7c49bf02c5041";
+          sha256 = "05w686cid7l546j5gc3vgwy6klr73c7c51fqmpl1q4p4i1zkhvm1";
         };
         libName = "zenoh_gateway";
         dependencies = [

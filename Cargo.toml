@@ -1,6 +1,6 @@
 [package]
 name = "zenoh-dimos-codecs"
-version = "0.4.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.88"
 description = "zenoh-gateway codecs for ROS 2 and dimos images, depth and point clouds, plus hardware H.264 encoders (macOS VideoToolbox, GStreamer: Jetson nvv4l2h264enc, NVENC, VAAPI) with a fallback to software"
@@ -19,7 +19,7 @@ videotoolbox = []
 gstreamer = ["dep:libloading"]
 
 [dependencies]
-zenoh-gateway = { version = "0.6.0", git = "https://github.com/jeff-hykin/zenoh-gateway", branch = "jeff/zenoh_1.10.1" }
+zenoh-gateway = { version = "0.5.4", git = "https://github.com/jeff-hykin/zenoh-gateway", branch = "jeff/zenoh_1.10.1" }
 anyhow = "1"
 # encodeOptions
 serde_json = "1"

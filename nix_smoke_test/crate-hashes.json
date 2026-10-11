@@ -1,4 +1,4 @@
 {
-  "git+https://github.com/jeff-hykin/zenoh-gateway?branch=jeff%2Fzenoh_1.10.1#0.6.0": "14zvhqx3bma9f40zwkiflhsdml4r3wxvsv12lf5giaqjvskkxkll",
+  "git+https://github.com/jeff-hykin/zenoh-gateway?branch=jeff%2Fzenoh_1.10.1#0.5.4": "05w686cid7l546j5gc3vgwy6klr73c7c51fqmpl1q4p4i1zkhvm1",
   "git+https://github.com/jeff-hykin/zenoh-vendor?tag=zenoh-1.10.1-patch.1#zenoh@1.10.1": "0zb1nkfp6n9wgrb7q197xapkv6nanb999h2y4kikmc5ahbbyxibh"
 }

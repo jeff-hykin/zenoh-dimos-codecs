@@ -5153,7 +5153,7 @@ dependencies = [
 
 [[package]]
 name = "zenoh-dimos-codecs"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "image-webp",
@@ -5191,8 +5191,8 @@ dependencies = [
 
 [[package]]
 name = "zenoh-gateway"
-version = "0.6.0"
-source = "git+https://github.com/jeff-hykin/zenoh-gateway?branch=jeff%2Fzenoh_1.10.1#df51a8e62d69b801a46438b1fbd143b7533f1017"
+version = "0.5.4"
+source = "git+https://github.com/jeff-hykin/zenoh-gateway?branch=jeff%2Fzenoh_1.10.1#dce65a3cc2a5f250da80a194d0c7c49bf02c5041"
 dependencies = [
  "anyhow",
  "async-trait",
