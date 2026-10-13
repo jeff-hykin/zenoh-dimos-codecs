@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use libloading::Library;
+use std::borrow::Cow;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
@@ -292,6 +293,7 @@ impl Pipeline {
                 let event = (self.api.force_key_unit)(CLOCK_TIME_NONE, CLOCK_TIME_NONE, CLOCK_TIME_NONE, 1, 0);
                 (self.api.element_send_event)(self.source, event);
             }
+            let i420 = gstreamer_layout(i420, self.size);
             let buffer = (self.api.buffer_new_allocate)(null_mut(), i420.len(), null_mut());
             ensure!(!buffer.is_null(), "GStreamer: no buffer");
             (self.api.buffer_fill)(buffer, 0, i420.as_ptr().cast(), i420.len());
@@ -312,6 +314,25 @@ impl Pipeline {
             Ok(Some(data))
         }
     }
+}
+
+/// Packed I420 in GStreamer's default layout for raw caps (rows padded to 4 bytes): read packed, a width that is not a
+/// multiple of 8 came out diagonally sheared and off-color (1362 wide through nvv4l2h264enc on the R1).
+fn gstreamer_layout(packed: &[u8], (width, height): (u32, u32)) -> Cow<'_, [u8]> {
+    let (width, height) = (width as usize, height as usize);
+    let (luma_stride, chroma_stride) = (width.next_multiple_of(4), (width / 2).next_multiple_of(4));
+    if (luma_stride, chroma_stride) == (width, width / 2) {
+        return Cow::Borrowed(packed);
+    }
+    let (luma, chroma) = packed.split_at(width * height);
+    let mut out = Vec::with_capacity(luma_stride * height + chroma_stride * height);
+    for (rows, row_len, stride) in [(luma, width, luma_stride), (chroma, width / 2, chroma_stride)] {
+        for row in rows.chunks_exact(row_len) {
+            out.extend_from_slice(row);
+            out.resize(out.len() + stride - row_len, 0);
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// Whether an Annex B access unit holds an IDR slice (NAL type 5).
@@ -388,5 +409,19 @@ impl VideoEncoder for GstreamerEncoder {
         let i420 = image.to_i420(target.width, target.height)?;
         let encoded = pipeline.encode(i420.data(), target.keyframe && !fresh)?;
         Ok(encoded.map(|data| EncodedVideo { keyframe: has_idr(&data), data, width: target.width, height: target.height }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_padded_to_gstreamer_strides() {
+        let packed: Vec<u8> = (0..6 * 2 * 3 / 2).map(|index| index as u8 + 1).collect();
+        // 6 wide: luma rows to 8 bytes, chroma rows (3) to 4
+        assert_eq!(&*gstreamer_layout(&packed, (6, 2)), &[1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 0, 0, 13, 14, 15, 0, 16, 17, 18, 0]);
+        let aligned = vec![0u8; 16 * 2 * 3 / 2];
+        assert!(matches!(gstreamer_layout(&aligned, (16, 2)), Cow::Borrowed(_)), "a width that is a multiple of 8 is already laid out");
     }
 }
