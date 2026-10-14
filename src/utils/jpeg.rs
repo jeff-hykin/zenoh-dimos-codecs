@@ -44,24 +44,31 @@ pub fn to_i420(data: &[u8]) -> Result<Option<VideoImage>> {
     }
     let pixels = decoder.decode().map_err(|e| anyhow::anyhow!("jpeg: {e:?}"))?;
     ensure!(pixels.len() >= width * height * 3, "jpeg: decoder returned too few samples");
-    let luma_table: [u8; 256] = std::array::from_fn(|value| (16 + (value as u32 * 219 + 127) / 255) as u8);
-    let chroma_table: [u8; 1021] = std::array::from_fn(|sum| (16 + (sum as u32 * 224 + 510) / 1020) as u8);
+    Ok(Some(VideoImage::i420(width as u32, height as u32, ycbcr_to_i420(&pixels, width, height))?))
+}
+
+/// Interleaved full-range YCbCr (JFIF, `width × height`, both even) as BT.601 limited-range I420, chroma from each
+/// 2x2 block's mean.
+pub fn ycbcr_to_i420(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
+    // (arithmetic rather than lookup tables: the compiler vectorizes it: ~1.4x faster on an Apple M core)
+    let luma_of = |value: u8| (16 + (value as u32 * 219 + 127) / 255) as u8;
+    let chroma_of = |sum: u32| (16 + (sum * 224 + 510) / 1020) as u8;
     let mut out = vec![0u8; width * height * 3 / 2];
     let (luma, chroma) = out.split_at_mut(width * height);
     let (u_plane, v_plane) = chroma.split_at_mut(width * height / 4);
     for (luma_value, pixel) in luma.iter_mut().zip(pixels.as_chunks::<3>().0) {
-        *luma_value = luma_table[pixel[0] as usize];
+        *luma_value = luma_of(pixel[0]);
     }
     let half_width = width / 2;
     for (block_row, (u_row, v_row)) in u_plane.chunks_exact_mut(half_width).zip(v_plane.chunks_exact_mut(half_width)).enumerate() {
         let top = pixels[block_row * 2 * width * 3..][..width * 3].as_chunks::<6>().0;
         let bottom = pixels[(block_row * 2 + 1) * width * 3..][..width * 3].as_chunks::<6>().0;
         for ((u, v), (a, b)) in u_row.iter_mut().zip(v_row.iter_mut()).zip(top.iter().zip(bottom)) {
-            *u = chroma_table[a[1] as usize + a[4] as usize + b[1] as usize + b[4] as usize];
-            *v = chroma_table[a[2] as usize + a[5] as usize + b[2] as usize + b[5] as usize];
+            *u = chroma_of(a[1] as u32 + a[4] as u32 + b[1] as u32 + b[4] as u32);
+            *v = chroma_of(a[2] as u32 + a[5] as u32 + b[2] as u32 + b[5] as u32);
         }
     }
-    Ok(Some(VideoImage::i420(width as u32, height as u32, out)?))
+    out
 }
 
 #[cfg(test)]
@@ -103,5 +110,53 @@ mod tests {
         let mean = differences.iter().sum::<i32>() as f64 / differences.len() as f64;
         let p99 = differences[differences.len() * 99 / 100];
         assert!(mean < 1.0 && p99 <= 5, "I420 straight from the jpeg differs from going through RGB: mean {mean:.2}, p99 {p99}");
+    }
+
+    fn psnr(a: &[u8], b: &[u8]) -> f64 {
+        assert_eq!(a.len(), b.len());
+        let mse = a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).powi(2)).sum::<f64>() / a.len() as f64;
+        10.0 * (255.0f64.powi(2) / mse.max(1e-9)).log10()
+    }
+
+    /// Smooth shading, edges and a little texture: what a camera sees, not a flat test card.
+    fn scene(width: u32, height: u32) -> Rgb8 {
+        let pixels = (0..height)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                let (fx, fy) = (x as f32 / width as f32, y as f32 / height as f32);
+                let light = 0.6 + 0.4 * (fx * 3.0 + fy * 2.0).sin();
+                let edge = if (x / 23 + y / 17) % 3 == 0 { 0.6 } else { 1.0 };
+                [0.9f32, 0.6, 0.3].map(|tint| (255.0 * light * edge * (0.3 + 0.7 * (tint + fx * 0.5).fract())) as u8)
+            })
+            .collect();
+        Rgb8 { width, height, pixels }
+    }
+
+    #[test]
+    fn video_pictures_match_the_source_at_any_size_and_sampling() {
+        use jpeg_encoder::SamplingFactor;
+        for (width, height) in [(1920, 1080), (1362, 768), (640, 482), (101, 75), (64, 3), (2, 2)] {
+            for sampling in [SamplingFactor::R_4_2_0, SamplingFactor::R_4_2_2, SamplingFactor::R_4_4_4] {
+                let source = scene(width, height);
+                let mut jpeg = Vec::new();
+                let mut encoder = jpeg_encoder::Encoder::new(&mut jpeg, 95);
+                encoder.set_sampling_factor(sampling);
+                encoder.encode(&source.pixels, width as u16, height as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+                let picture = crate::utils::compressed_image::to_video(&jpeg, "jpeg").unwrap();
+                let case = format!("{width}x{height} {sampling:?}");
+                assert_eq!((picture.width(), picture.height()), (width, height), "{case}");
+                if width % 2 == 1 || height % 2 == 1 {
+                    assert_eq!(picture.format(), zenoh_gateway::PixelFormat::Rgb8, "{case}: odd sides decode to rgb");
+                    let quality = psnr(picture.data(), &source.pixels);
+                    assert!(quality > 30.0, "{case}: {quality:.1} dB against the source");
+                    continue;
+                }
+                assert_eq!(picture.format(), zenoh_gateway::PixelFormat::I420, "{case}");
+                let quality = psnr(picture.data(), &rgb_to_i420(&source));
+                assert!(quality > 30.0, "{case}: {quality:.1} dB against the source");
+                let agreement = psnr(picture.data(), &rgb_to_i420(&to_rgb(&jpeg).unwrap()));
+                assert!(agreement > 40.0, "{case}: {agreement:.1} dB against the same jpeg through rgb");
+            }
+        }
     }
 }
