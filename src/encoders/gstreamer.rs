@@ -52,6 +52,8 @@ struct GError {
 const STATE_NULL: c_int = 1;
 const STATE_PLAYING: c_int = 4;
 const MESSAGE_ERROR: c_int = 1 << 1;
+/// Every message type but errors (GST_MESSAGE_ANY without GST_MESSAGE_ERROR).
+const MESSAGE_ANY_BUT_ERROR: c_int = !MESSAGE_ERROR;
 const CLOCK_TIME_NONE: u64 = u64::MAX;
 
 /// Opens the first of `names` that loads.
@@ -265,12 +267,21 @@ impl Pipeline {
         self.bitrate_bps = bitrate_bps;
     }
 
-    /// Fails with the pipeline's error, if it posted one.
+    /// Fails with the pipeline's error, if it posted one; drops every other message posted since. Nothing else reads
+    /// this bus, and a bus keeps what it is posted until it is popped: a long-lived pipeline's state, latency, QoS and
+    /// element messages piled up for as long as the stream ran.
     fn check_bus(&self) -> Result<()> {
         // SAFETY: the bus and message references are released here
         unsafe {
             let bus = (self.api.element_get_bus)(self.pipeline);
             let message = (self.api.bus_pop_filtered)(bus, MESSAGE_ERROR);
+            loop {
+                let other = (self.api.bus_pop_filtered)(bus, MESSAGE_ANY_BUT_ERROR);
+                if other.is_null() {
+                    break;
+                }
+                (self.api.mini_object_unref)(other);
+            }
             (self.api.object_unref)(bus);
             if message.is_null() {
                 return Ok(());
