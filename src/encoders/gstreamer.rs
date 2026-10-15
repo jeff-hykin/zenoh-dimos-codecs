@@ -153,6 +153,8 @@ struct Element {
     settings: &'static [(&'static str, &'static str)],
     /// the properties that set the keyframe interval, in frames
     keyframe_interval: &'static [&'static str],
+    /// the least width and height it encodes (smaller pictures are scaled up to it, keeping their shape)
+    min_size: (u32, u32),
 }
 
 /// Hardware encoders, in the order they are tried.
@@ -163,13 +165,15 @@ static HARDWARE: [Element; 4] = [
         kbps: false,
         settings: &[("control-rate", "1"), ("insert-sps-pps", "true"), ("insert-vui", "true"), ("maxperf-enable", "true"), ("preset-level", "1"), ("profile", "0"), ("poc-type", "2")],
         keyframe_interval: &["iframeinterval", "idrinterval"],
+        // under 160 wide or 64 high every frame failed (BlockSide error 0x4) on the R1's Orin, L4T 36
+        min_size: (160, 64),
     },
-    Element { name: "nvh264enc", upload: "", kbps: true, settings: &[("rc-mode", "cbr"), ("preset", "low-latency-hp"), ("zerolatency", "true"), ("bframes", "0")], keyframe_interval: &["gop-size"] },
-    Element { name: "vah264enc", upload: "videoconvert ! video/x-raw,format=NV12 !", kbps: true, settings: &[("rate-control", "cbr"), ("b-frames", "0"), ("target-usage", "7")], keyframe_interval: &["key-int-max"] },
-    Element { name: "vaapih264enc", upload: "videoconvert ! video/x-raw,format=NV12 !", kbps: true, settings: &[("rate-control", "cbr"), ("max-bframes", "0")], keyframe_interval: &["keyframe-period"] },
+    Element { name: "nvh264enc", upload: "", kbps: true, settings: &[("rc-mode", "cbr"), ("preset", "low-latency-hp"), ("zerolatency", "true"), ("bframes", "0")], keyframe_interval: &["gop-size"], min_size: (0, 0) },
+    Element { name: "vah264enc", upload: "videoconvert ! video/x-raw,format=NV12 !", kbps: true, settings: &[("rate-control", "cbr"), ("b-frames", "0"), ("target-usage", "7")], keyframe_interval: &["key-int-max"], min_size: (0, 0) },
+    Element { name: "vaapih264enc", upload: "videoconvert ! video/x-raw,format=NV12 !", kbps: true, settings: &[("rate-control", "cbr"), ("max-bframes", "0")], keyframe_interval: &["keyframe-period"], min_size: (0, 0) },
 ];
 /// Software, for trying the pipeline on a machine without a hardware encoder.
-static X264: Element = Element { name: "x264enc", upload: "", kbps: true, settings: &[("tune", "zerolatency"), ("speed-preset", "ultrafast"), ("bframes", "0")], keyframe_interval: &["key-int-max"] };
+static X264: Element = Element { name: "x264enc", upload: "", kbps: true, settings: &[("tune", "zerolatency"), ("speed-preset", "ultrafast"), ("bframes", "0")], keyframe_interval: &["key-int-max"], min_size: (0, 0) };
 const KEYFRAME_SECONDS: f64 = 3.0;
 /// Frames inside the encoder before `encode` waits for one to come out: hardware encoders take a few frame times
 /// (nvv4l2h264enc ~40 ms on a loaded Orin), so waiting for each frame's own output capped a stream at ~25 fps.
@@ -407,7 +411,7 @@ impl VideoEncoder for GstreamerEncoder {
 
     fn encode(&mut self, frame: &DecodedFrame, target: &VideoTarget) -> Result<Option<EncodedVideo>> {
         let DecodedFrame::Video(image) = frame else { bail!("{} takes pictures, got {frame:?}", self.element.name) };
-        let size = (target.width, target.height);
+        let size = at_least((target.width, target.height), self.element.min_size);
         // encoders budget each frame from the caps' rate, so a rate that moves far rebuilds the pipeline
         let fresh = self.pipeline.as_ref().is_none_or(|pipeline| pipeline.size != size || (pipeline.fps / target.fps).max(target.fps / pipeline.fps) > 1.3);
         if fresh {
@@ -417,15 +421,47 @@ impl VideoEncoder for GstreamerEncoder {
         if pipeline.bitrate_bps != target.bitrate_bps {
             pipeline.set_bitrate(target.bitrate_bps);
         }
-        let i420 = image.to_i420(target.width, target.height)?;
+        let i420 = image.to_i420(size.0, size.1)?;
         let encoded = pipeline.encode(i420.data(), target.keyframe && !fresh)?;
-        Ok(encoded.map(|data| EncodedVideo { keyframe: has_idr(&data), data, width: target.width, height: target.height }))
+        Ok(encoded.map(|data| EncodedVideo { keyframe: has_idr(&data), data, width: size.0, height: size.1 }))
     }
+}
+
+/// `size` scaled up (shape kept, width a multiple of 16 and height even, as zenoh-gateway sizes them) to at least `min`.
+fn at_least((width, height): (u32, u32), (min_width, min_height): (u32, u32)) -> (u32, u32) {
+    let scale = (min_width as f64 / width.max(1) as f64).max(min_height as f64 / height.max(1) as f64);
+    if scale <= 1.0 {
+        return (width, height);
+    }
+    let up = |value: u32, step: u32| ((value as f64 * scale).ceil() as u32).next_multiple_of(step);
+    (up(width, 16).max(min_width), up(height, 2).max(min_height))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_pictures_scale_up_to_the_least_size() {
+        assert_eq!(at_least((320, 180), (160, 64)), (320, 180));
+        assert_eq!(at_least((128, 72), (160, 64)), (160, 90));
+        assert_eq!(at_least((640, 48), (160, 64)), (864, 64));
+        assert_eq!(at_least((48, 640), (160, 64)), (160, 2134));
+        assert_eq!(at_least((96, 54), (0, 0)), (96, 54));
+    }
+
+    /// On a machine with a hardware encoder (else it passes untested): pictures under its least size still encode.
+    #[test]
+    fn tiny_pictures_encode_in_hardware() {
+        let Ok(mut encoder) = GstreamerEncoder::hardware() else { return };
+        for (width, height) in [(128, 72), (64, 36), (640, 48), (320, 180)] {
+            let image = zenoh_gateway::VideoImage::i420(width, height, vec![128; (width * height * 3 / 2) as usize]).unwrap();
+            let target = VideoTarget::new(width, height, 300_000, 30.0);
+            let out = (0..=MAX_IN_FLIGHT + 1).find_map(|_| encoder.encode(&DecodedFrame::Video(image.clone()), &target).unwrap());
+            let out = out.unwrap_or_else(|| panic!("{width}x{height}: no frame came out"));
+            assert!(out.width >= encoder.element.min_size.0 && out.height >= encoder.element.min_size.1, "{width}x{height} came out {}x{}", out.width, out.height);
+        }
+    }
 
     #[test]
     fn rows_padded_to_gstreamer_strides() {
