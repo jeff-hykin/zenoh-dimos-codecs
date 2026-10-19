@@ -23,6 +23,7 @@
 pub mod gstreamer;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub mod videotoolbox;
+pub mod process;
 
 use anyhow::{Result, bail};
 use std::str::FromStr;
@@ -64,12 +65,16 @@ pub struct Selected {
     pub name: String,
     /// `None` for software: zenoh-gateway's default.
     pub factory: Option<Factory>,
+    /// The hardware encoder alone, without `factory`'s hand-over to software: errors come out instead, for a host that
+    /// runs it in a child process and restarts that on an error or a hang (zenoh-gateway's
+    /// `ServerBuilder::video_encoder_process`, where software is too slow to be useful, as on a Jetson).
+    pub hardware: Option<Factory>,
 }
 
 /// Probes `backend` (with [`Backend::Auto`], each hardware one in turn) by encoding a test frame. An explicitly named
 /// backend that isn't built in or doesn't work is an error; `Auto` falls back to software.
 pub fn select(backend: Backend) -> Result<Selected> {
-    let software = || Selected { name: "software".into(), factory: None };
+    let software = || Selected { name: "software".into(), factory: None, hardware: None };
     let candidates: &[Backend] = match backend {
         Backend::Software => return Ok(software()),
         Backend::Auto => &[Backend::VideoToolbox, Backend::Gstreamer],
@@ -97,7 +102,11 @@ fn probe(backend: Backend) -> Result<Selected> {
             let mut encoder = videotoolbox::VideoToolboxEncoder::default();
             let image = zenoh_gateway::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
             encoder.encode(&DecodedFrame::Video(image), &VideoTarget::new(320, 240, 1_000_000, 30.0))?;
-            Ok(Selected { name: "videotoolbox".into(), factory: Some(Box::new(|| Box::new(Fallback::new("videotoolbox", videotoolbox::VideoToolboxEncoder::default())))) })
+            Ok(Selected {
+                name: "videotoolbox".into(),
+                factory: Some(Box::new(|| Box::new(Fallback::new("videotoolbox", videotoolbox::VideoToolboxEncoder::default())))),
+                hardware: Some(Box::new(|| Box::new(videotoolbox::VideoToolboxEncoder::default()))),
+            })
         }
         #[cfg(feature = "gstreamer")]
         Backend::Gstreamer => {
@@ -109,9 +118,29 @@ fn probe(backend: Backend) -> Result<Selected> {
                     Box::new(H264Encoder::default())
                 }
             });
-            Ok(Selected { name: format!("gstreamer {element}"), factory: Some(factory) })
+            let hardware: Factory = Box::new(move || match gstreamer::GstreamerEncoder::with_element(element) {
+                Ok(encoder) => Box::new(encoder),
+                Err(error) => Box::new(Failed(format!("{element}: {error:#}"))),
+            });
+            Ok(Selected { name: format!("gstreamer {element}"), factory: Some(factory), hardware: Some(hardware) })
         }
         other => bail!("{other:?} is not built in (cargo feature {:?})", format!("{other:?}").to_lowercase()),
+    }
+}
+
+/// A hardware encoder that could not be made: every encode fails with why (a child process running it exits and is
+/// started again, which may find the device working).
+#[cfg(feature = "gstreamer")]
+struct Failed(String);
+
+#[cfg(feature = "gstreamer")]
+impl VideoEncoder for Failed {
+    fn format(&self) -> VideoFormat {
+        VideoFormat::H264
+    }
+
+    fn encode(&mut self, _: &DecodedFrame, _: &VideoTarget) -> Result<Option<EncodedVideo>> {
+        bail!("{}", self.0)
     }
 }
 

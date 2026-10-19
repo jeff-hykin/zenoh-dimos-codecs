@@ -1,0 +1,370 @@
+//! A video encoder in a child process, so a hardware encoder that hangs or crashes is killed and started again: the OS
+//! frees its threads, memory and device session, which a call stuck inside the gateway's process could never give back
+//! (a wedged Jetson encoder, rebuilt in-process every frame, took the R1's Desktop to 640 threads and 3.4 GB).
+//!
+//! The child is the host's own program again (`std::env::current_exe`, same arguments) with [`CHILD_ENV`] set: the
+//! host calls [`serve_if_child`] in `main` as soon as it has its encoder factory, which in the child serves encodes on
+//! stdin/stdout and never returns. Frames go over the pipe as raw pictures, the bitstream comes back. In the parent the
+//! host registers [`factory`] with zenoh-gateway's `ServerBuilder::video_encoder`, configured by [`ProcessConfig`].
+
+use zenoh_gateway::{DecodedFrame, EncodedVideo, PixelFormat, VideoEncoder, VideoFormat, VideoImage, VideoTarget};
+use anyhow::{Context, Result, bail};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Arc;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+/// Set in a child started by a [`ProcessEncoder`]: [`serve_if_child`] serves encodes instead of returning.
+pub const CHILD_ENV: &str = "ZENOH_DIMOS_VIDEO_ENCODER_CHILD";
+
+/// How a [`ProcessEncoder`] runs its children; the host sets it.
+#[derive(Clone)]
+pub struct ProcessConfig {
+    /// An encode not answered within this restarts the child. Keep it under the gateway's `encode_timeout` (default
+    /// 5 s; half of it is a good choice), or the gateway gives up first and the encode keeps a thread.
+    pub deadline: Duration,
+    /// How long a new child has to make its encoder and say so; frames meanwhile are skipped, not waited on.
+    pub startup_timeout: Duration,
+    /// Starts a child: the host program again by default ([`ProcessConfig::current_exe`]), which must reach
+    /// [`serve_if_child`]; [`CHILD_ENV`] is set on it.
+    pub command: Arc<dyn Fn() -> Command + Send + Sync>,
+}
+
+impl ProcessConfig {
+    /// Children are this program again, with its arguments; `deadline` as above, 20 s to start.
+    pub fn new(deadline: Duration) -> Self {
+        ProcessConfig { deadline, startup_timeout: Duration::from_secs(20), command: Self::current_exe() }
+    }
+
+    /// The host program again, with the arguments it was started with.
+    pub fn current_exe() -> Arc<dyn Fn() -> Command + Send + Sync> {
+        Arc::new(|| {
+            let mut command = Command::new(std::env::current_exe().unwrap_or_else(|_| std::env::args().next().unwrap_or_default().into()));
+            command.args(std::env::args_os().skip(1));
+            command
+        })
+    }
+}
+
+/// A factory for zenoh-gateway's `ServerBuilder::video_encoder`: a [`ProcessEncoder`] of `format` per encode session.
+pub fn factory(format: VideoFormat, config: ProcessConfig) -> super::Factory {
+    Box::new(move || Box::new(ProcessEncoder::new(config.clone(), format)))
+}
+/// Written by a child once its encoder is made; whatever the program printed to stdout before it is skipped.
+const READY: &[u8] = b"\0zenoh-gateway video encoder ready\0";
+/// The most a child may print to stdout before `READY`.
+const MAX_BEFORE_READY: usize = 64 * 1024;
+
+/// In a process a [`ProcessEncoder`] started: serves encodes from stdin to stdout with `factory`'s encoder and exits
+/// (after an encoder error too: the parent starts a fresh child). Anywhere else it returns at once. Call it in `main`
+/// once the encoder factory is known; the child runs `main` again up to here.
+pub fn serve_if_child(factory: &(dyn Fn() -> Box<dyn VideoEncoder> + Send + Sync)) {
+    if std::env::var_os(CHILD_ENV).is_none() {
+        return;
+    }
+    let code = match serve(factory) {
+        Ok(()) => 0,
+        Err(error) => {
+            log::warn!("video encoder process: {error:#}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
+fn serve(factory: &(dyn Fn() -> Box<dyn VideoEncoder> + Send + Sync)) -> Result<()> {
+    let mut encoder = factory();
+    let (mut input, mut output) = (BufReader::new(std::io::stdin().lock()), BufWriter::new(std::io::stdout().lock()));
+    output.write_all(READY)?;
+    output.flush()?;
+    loop {
+        let (frame, target) = match read_request(&mut input) {
+            Ok(Some(request)) => request,
+            // the parent closed the pipe: it is done with this encoder
+            Ok(None) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match encoder.encode(&frame, &target) {
+            Ok(encoded) => write_reply(&mut output, &Ok(encoded))?,
+            Err(error) => {
+                write_reply(&mut output, &Err(format!("{error:#}")))?;
+                output.flush()?;
+                bail!("encoder failed: {error:#}");
+            }
+        }
+        output.flush()?;
+    }
+}
+
+/// A [`VideoEncoder`] whose encodes run in a child process (see the module docs): one that takes longer than its
+/// deadline, or a child that exits or crashes, kills the child and starts another, whose first frame is a keyframe.
+pub struct ProcessEncoder {
+    config: ProcessConfig,
+    format: VideoFormat,
+    child: Option<Running>,
+    /// children started for this encoder, the first included
+    pub starts: u64,
+}
+
+/// A started child and the thread that talks to it.
+struct Running {
+    child: Child,
+    requests: mpsc::Sender<Vec<u8>>,
+    replies: mpsc::Receiver<std::result::Result<Reply, String>>,
+    started: Instant,
+    ready: bool,
+}
+
+enum Reply {
+    Ready,
+    Encoded(std::result::Result<Option<EncodedVideo>, String>),
+}
+
+impl ProcessEncoder {
+    /// Encodes `format` in children run as `config` says; the first is started now, so it is ready by the first frames.
+    pub fn new(config: ProcessConfig, format: VideoFormat) -> Self {
+        let mut encoder = ProcessEncoder { config, format, child: None, starts: 0 };
+        encoder.start();
+        encoder
+    }
+
+    fn start(&mut self) {
+        self.starts += 1;
+        let mut command = (self.config.command)();
+        command.env(CHILD_ENV, "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        match command.spawn() {
+            Ok(mut child) => {
+                let (stdin, stdout) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"));
+                let (requests, request_rx) = mpsc::channel();
+                let (reply_tx, replies) = mpsc::channel();
+                std::thread::Builder::new()
+                    .name("video encoder process".into())
+                    .spawn(move || talk(stdin, stdout, request_rx, reply_tx))
+                    .expect("a thread");
+                self.child = Some(Running { child, requests, replies, started: Instant::now(), ready: false });
+            }
+            Err(error) => log::warn!("video encoder process would not start: {error}"),
+        }
+    }
+
+    /// Kills the child (a hung one included: the OS takes back what it held) and starts another.
+    fn restart(&mut self, why: &str) {
+        log::warn!("video encoder process {why}: restarting it");
+        if let Some(mut running) = self.child.take() {
+            let _ = running.child.kill();
+            // reaped off this thread: a child stuck in the device can take a while to go
+            std::thread::spawn(move || {
+                let _ = running.child.wait();
+            });
+        }
+        self.start();
+    }
+}
+
+impl Drop for ProcessEncoder {
+    fn drop(&mut self) {
+        if let Some(mut running) = self.child.take() {
+            // closing its stdin ends a healthy child; kill covers a stuck one
+            drop(running.requests);
+            let _ = running.child.kill();
+            std::thread::spawn(move || {
+                let _ = running.child.wait();
+            });
+        }
+    }
+}
+
+impl VideoEncoder for ProcessEncoder {
+    fn format(&self) -> VideoFormat {
+        self.format
+    }
+
+    fn encode(&mut self, frame: &DecodedFrame, target: &VideoTarget) -> Result<Option<EncodedVideo>> {
+        if self.child.is_none() {
+            self.start();
+        }
+        let Some(running) = self.child.as_mut() else { bail!("the video encoder process would not start") };
+        if !running.ready {
+            match running.replies.try_recv() {
+                Ok(Ok(Reply::Ready)) => running.ready = true,
+                Ok(other) => {
+                    let why = match other {
+                        Err(error) => error,
+                        _ => "answered before it was ready".into(),
+                    };
+                    self.restart(&format!("failed to start ({why})"));
+                    return Ok(None);
+                }
+                Err(mpsc::TryRecvError::Empty) if running.started.elapsed() < self.config.startup_timeout => return Ok(None),
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.restart(&format!("did not start within {:?}", self.config.startup_timeout));
+                    return Ok(None);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.restart("exited while starting");
+                    return Ok(None);
+                }
+            }
+        }
+        // a fresh child's first frame is a keyframe, which the viewers need after a restart
+        let request = encode_request(frame, target)?;
+        let running = self.child.as_mut().expect("started above");
+        if running.requests.send(request).is_err() {
+            self.restart("exited");
+            bail!("the video encoder process exited: restarted");
+        }
+        match running.replies.recv_timeout(self.config.deadline) {
+            Ok(Ok(Reply::Encoded(Ok(encoded)))) => Ok(encoded),
+            Ok(Ok(Reply::Encoded(Err(error)))) => {
+                self.restart(&format!("failed ({error})"));
+                bail!("video encoder: {error}: its process was restarted")
+            }
+            Ok(Ok(Reply::Ready)) => bail!("the video encoder process said ready twice"),
+            Ok(Err(error)) => {
+                self.restart(&format!("exited ({error})"));
+                bail!("the video encoder process exited ({error}): restarted")
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.restart(&format!("hung (no frame within {:?})", self.config.deadline));
+                bail!("the video encoder hung for {:?}: its process was restarted", self.config.deadline)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.restart("exited");
+                bail!("the video encoder process exited: restarted")
+            }
+        }
+    }
+}
+
+/// The child's I/O, on its own thread: a hung child blocks this thread (until it is killed), never the gateway's.
+fn talk(stdin: ChildStdin, stdout: ChildStdout, requests: mpsc::Receiver<Vec<u8>>, replies: mpsc::Sender<std::result::Result<Reply, String>>) {
+    let (mut input, mut output) = (BufWriter::new(stdin), BufReader::new(stdout));
+    let mut seen = Vec::new();
+    while !seen.ends_with(READY) {
+        let [byte] = match read_array(&mut output) {
+            Ok(byte) => byte,
+            Err(error) => {
+                let _ = replies.send(Err(format!("no ready signal: {error:#}")));
+                return;
+            }
+        };
+        seen.push(byte);
+        if seen.len() > MAX_BEFORE_READY + READY.len() {
+            let _ = replies.send(Err(format!("no ready signal in its first {MAX_BEFORE_READY} bytes of output")));
+            return;
+        }
+    }
+    if replies.send(Ok(Reply::Ready)).is_err() {
+        return;
+    }
+    for request in requests {
+        if let Err(error) = input.write_all(&request).and_then(|()| input.flush()) {
+            let _ = replies.send(Err(format!("writing a frame: {error}")));
+            return;
+        }
+        let reply = read_reply(&mut output).map_err(|error| format!("{error:#}"));
+        let failed = reply.is_err();
+        if replies.send(reply.map(Reply::Encoded)).is_err() || failed {
+            return;
+        }
+    }
+}
+
+/// `target` (quality f64, width u32, height u32, bitrate u32, fps f64, keyframe u8), then the picture (pixel format
+/// u8, width u32, height u32, length u32, bytes), little endian.
+fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>> {
+    let DecodedFrame::Video(image) = frame else { bail!("a video encoder process encodes pictures, got {frame:?}") };
+    let mut bytes = Vec::with_capacity(48 + image.data().len());
+    bytes.extend_from_slice(&target.quality.to_le_bytes());
+    bytes.extend_from_slice(&target.width.to_le_bytes());
+    bytes.extend_from_slice(&target.height.to_le_bytes());
+    bytes.extend_from_slice(&target.bitrate_bps.to_le_bytes());
+    bytes.extend_from_slice(&target.fps.to_le_bytes());
+    bytes.push(target.keyframe as u8);
+    bytes.push(match image.format() {
+        PixelFormat::Rgb8 => 0,
+        PixelFormat::I420 => 1,
+    });
+    bytes.extend_from_slice(&image.width().to_le_bytes());
+    bytes.extend_from_slice(&image.height().to_le_bytes());
+    bytes.extend_from_slice(&(image.data().len() as u32).to_le_bytes());
+    bytes.extend_from_slice(image.data());
+    Ok(bytes)
+}
+
+fn read_request(input: &mut impl Read) -> Result<Option<(DecodedFrame, VideoTarget)>> {
+    let mut head = [0u8; 8];
+    match input.read_exact(&mut head) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let quality = f64::from_le_bytes(head);
+    let (width, height, bitrate_bps) = (read_u32(input)?, read_u32(input)?, read_u32(input)?);
+    let fps = f64::from_le_bytes(read_array(input)?);
+    let [keyframe, pixel_format] = read_array(input)?;
+    let (image_width, image_height, length) = (read_u32(input)?, read_u32(input)?, read_u32(input)?);
+    let mut data = vec![0u8; length as usize];
+    input.read_exact(&mut data).context("a picture's bytes")?;
+    let image = match pixel_format {
+        0 => VideoImage::rgb8(image_width, image_height, data)?,
+        1 => VideoImage::i420(image_width, image_height, data)?,
+        other => bail!("unknown pixel format {other}"),
+    };
+    let mut target = VideoTarget::new(width, height, bitrate_bps, fps);
+    (target.quality, target.keyframe) = (quality, keyframe != 0);
+    Ok(Some((DecodedFrame::Video(image), target)))
+}
+
+/// 0 = nothing out yet; 1 = a frame (width u32, height u32, keyframe u8, length u32, bytes); 2 = an error (length u32,
+/// UTF-8), little endian.
+fn write_reply(output: &mut impl Write, reply: &std::result::Result<Option<EncodedVideo>, String>) -> Result<()> {
+    match reply {
+        Ok(None) => output.write_all(&[0])?,
+        Ok(Some(frame)) => {
+            output.write_all(&[1])?;
+            output.write_all(&frame.width.to_le_bytes())?;
+            output.write_all(&frame.height.to_le_bytes())?;
+            output.write_all(&[frame.keyframe as u8])?;
+            output.write_all(&(frame.data.len() as u32).to_le_bytes())?;
+            output.write_all(&frame.data)?;
+        }
+        Err(error) => {
+            output.write_all(&[2])?;
+            output.write_all(&(error.len() as u32).to_le_bytes())?;
+            output.write_all(error.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn read_reply(input: &mut impl Read) -> Result<std::result::Result<Option<EncodedVideo>, String>> {
+    let [tag] = read_array(input)?;
+    Ok(match tag {
+        0 => Ok(None),
+        1 => {
+            let (width, height) = (read_u32(input)?, read_u32(input)?);
+            let [keyframe] = read_array(input)?;
+            let mut data = vec![0u8; read_u32(input)? as usize];
+            input.read_exact(&mut data)?;
+            Ok(Some(EncodedVideo { data, width, height, keyframe: keyframe != 0 }))
+        }
+        2 => {
+            let mut text = vec![0u8; read_u32(input)? as usize];
+            input.read_exact(&mut text)?;
+            Err(String::from_utf8_lossy(&text).into_owned())
+        }
+        other => bail!("unknown reply {other}"),
+    })
+}
+
+fn read_array<const N: usize>(input: &mut impl Read) -> Result<[u8; N]> {
+    let mut bytes = [0u8; N];
+    input.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_u32(input: &mut impl Read) -> Result<u32> {
+    Ok(u32::from_le_bytes(read_array(input)?))
+}
