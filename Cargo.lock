@@ -5124,7 +5124,7 @@ dependencies = [
 
 [[package]]
 name = "zenoh-dimos-codecs"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "image-webp",

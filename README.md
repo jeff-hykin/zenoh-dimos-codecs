@@ -71,9 +71,10 @@ Depth stays lossless: quality only lowers resolution, by an integer stride `roun
 
 Point clouds: points with a non-finite x, y or z are skipped; fields are read by name (`x`, `y`, `z`,
 optional `intensity`) at their offsets with any PointField datatype, honoring `point_step`, `row_step`
-and `is_bigendian`. Quality q thins the cloud to 1 point in every `round(1 / q)` (at most 16 at q = 0):
-points 0, N, 2N, ... in message order, never moved or merged, with no assumption about units or
-spacing (`keepEvery`). Coordinates are int16 around a per-message origin: `x = originX + qx × scale`.
+and `is_bigendian`. Quality q thins the cloud to a budget of 1 point in `round(1 / q)` (at most 16 at
+q = 0), within 10%: the first point of each cell of a voxel grid sized to the budget, in message order,
+never moved or merged, in any units; so what is kept is spread over the cloud's space instead of every
+Nth point of each scan line (`keepEvery`: source points per sent point, rounded). Coordinates are int16 around a per-message origin: `x = originX + qx × scale`.
 Error per axis of a sent point is at most `scale / 2` (`maxError`), where `scale = (largest
 bounding-box extent / 2) / 32767` in the cloud's own units, plus f32 rounding. Intensity is scaled to
 u8 over the message's min..max (`intensityMin`, `intensityScale`). `positions` is a `Float32Array`.

@@ -1,13 +1,16 @@
 //! PointCloud2 to compact zenoh-gateway fields (zstd-compressed by the bridge by default): optional
-//! thinning (keep every Nth point), xyz quantized to int16 around a per-message origin, optional u8
+//! thinning to a point budget (a voxel grid), xyz quantized to int16 around a per-message origin, optional u8
 //! intensity. Fields, see README "Wire formats": `version=3`, `count`, `sourceCount`, `origin` (f32 × 3),
 //! `scale`, `keepEvery`, `maxError`, `positions` (scaled i16 x, y, z), `intensity` (u8, if the cloud
 //! has it), `intensityMin`, `intensityScale`.
 //!
 //! Decoded `x = originX + qx * scale`. The error per axis of each sent point is at most `scale / 2`,
 //! where `scale = (largest bounding-box extent / 2) / 32767` (plus f32 rounding, ~1e-7 relative), in
-//! whatever units the cloud uses. Thinning keeps points 0, N, 2N, ... in message order: it never
-//! moves a point and assumes nothing about units or spacing.
+//! whatever units the cloud uses. Thinning at quality q keeps about q of the points (at least 1 in
+//! MAX_KEEP_EVERY): the first point of each cell of a voxel grid sized to that budget, in message order, so
+//! it never moves a point and spreads what it keeps over the cloud's space (1-in-N in message order kept
+//! every Nth point of each scan line: dense near the robot, gaps far away, and whole rings dropped from a
+//! ring-ordered lidar). `keepEvery` is the source count over the kept count, rounded.
 
 use crate::codecs::msgs::{PointCloud, PointField};
 use anyhow::{Context, Result, bail, ensure};
@@ -104,13 +107,65 @@ pub fn read_points(cloud: &PointCloud) -> Result<Points> {
     Ok(Points { points, has_intensity: intensity.is_some() })
 }
 
-/// Points 0, N, 2N, ... (N = `keep_every`), in message order.
+/// About `points.len() / keep_every` of the points, in message order: the first in each cell of a voxel grid whose cell
+/// size is searched for (on a log scale) until the kept count is within `BUDGET_SLACK` of the budget.
 fn thin(points: &[Point], keep_every: u32) -> Cow<'_, [Point]> {
-    if keep_every <= 1 {
+    if keep_every <= 1 || points.len() < 2 {
         return Cow::Borrowed(points);
     }
-    points.iter().step_by(keep_every as usize).cloned().collect::<Vec<_>>().into()
+    let budget = points.len().div_ceil(keep_every as usize);
+    let mut low = [f64::INFINITY; 3];
+    let mut high = [f64::NEG_INFINITY; 3];
+    for point in points {
+        for axis in 0..3 {
+            low[axis] = low[axis].min(point.xyz[axis]);
+            high[axis] = high[axis].max(point.xyz[axis]);
+        }
+    }
+    let extent = (0..3).map(|axis| high[axis] - low[axis]).fold(0.0, f64::max);
+    if extent <= 0.0 {
+        return points.iter().step_by(keep_every as usize).cloned().collect::<Vec<_>>().into();
+    }
+    let kept = |cell: f64| -> Vec<usize> {
+        let mut seen = std::collections::HashSet::with_capacity(budget * 2);
+        (0..points.len())
+            .filter(|&index| {
+                let xyz = points[index].xyz;
+                let key: [i64; 3] = std::array::from_fn(|axis| ((xyz[axis] - low[axis]) / cell).floor() as i64);
+                seen.insert(key)
+            })
+            .collect()
+    };
+    // a surface-like cloud (a scan, a map's floor and walls) of `budget` cells: extent^2 / cell^2 = budget
+    let (mut small, mut large) = (extent * 1e-6, extent);
+    let mut cell = extent / (budget as f64).sqrt();
+    let mut best: Option<Vec<usize>> = None;
+    for _ in 0..BUDGET_SEARCH_STEPS {
+        let indices = kept(cell);
+        let count = indices.len();
+        let closer = best.as_ref().is_none_or(|best| count.abs_diff(budget) < best.len().abs_diff(budget));
+        if closer {
+            best = Some(indices);
+        }
+        if (count as f64 - budget as f64).abs() <= BUDGET_SLACK * budget as f64 {
+            break;
+        }
+        // more cells kept than budgeted: grow them
+        if count > budget { small = cell } else { large = cell }
+        cell = (small * large).sqrt();
+    }
+    let mut indices = best.unwrap_or_default();
+    // still over (a cloud of duplicates): every Nth of what the grid kept
+    if indices.len() as f64 > budget as f64 * (1.0 + BUDGET_SLACK) {
+        let step = indices.len().div_ceil(budget);
+        indices = indices.into_iter().step_by(step).collect();
+    }
+    indices.into_iter().map(|index| points[index].clone()).collect::<Vec<_>>().into()
 }
+
+/// How far from its point budget a thinned cloud may land, and how many grid sizes are tried to get there.
+const BUDGET_SLACK: f64 = 0.1;
+const BUDGET_SEARCH_STEPS: usize = 12;
 
 /// (origin, scale) so every point fits int16.
 fn quantization_grid(low: [f64; 3], high: [f64; 3]) -> ([f64; 3], f64) {
@@ -161,7 +216,7 @@ pub fn encode_points(cloud: &Points, quality: f64) -> Vec<u8> {
         .scalar("sourceCount", source_count as u32)
         .vectors("origin", 3, &origin)
         .scalar("scale", scale)
-        .scalar("keepEvery", keep_every)
+        .scalar("keepEvery", if points.is_empty() { keep_every } else { (source_count as f64 / points.len() as f64).round().max(1.0) as u32 })
         .scalar("maxError", scale / 2.0)
         .scaled("positions", &origin.map(f64::from), &[scale as f64; 3], &quantized)
         .scalar("intensityMin", intensity_min)
@@ -223,7 +278,8 @@ mod tests {
         let cloud = Points { points, has_intensity: false };
         let [full, half, lowest] = [1.0, 0.5, 0.0].map(|quality| encode_points(&cloud, quality));
         assert!(half.len() * 4 < full.len() * 3 && lowest.len() < half.len(), "{} / {} / {}", full.len(), half.len(), lowest.len());
-        assert_eq!(zenoh_gateway::fields::parse(&encode_points(&cloud, 0.5)).unwrap()["count"].values(), [10000.0]);
+        let count = zenoh_gateway::fields::parse(&encode_points(&cloud, 0.5)).unwrap()["count"].values()[0];
+        assert!((count - 10000.0).abs() <= BUDGET_SLACK * 10000.0, "half the points, within the budget's slack: {count}");
     }
 
     #[test]
@@ -232,42 +288,70 @@ mod tests {
         assert_eq!(mapped, [1, 1, 2, 3, 4, 10, MAX_KEEP_EVERY, MAX_KEEP_EVERY]);
     }
 
-    #[test]
-    fn thinning_keeps_every_nth_source_point_unmoved() {
-        let payload = fixture("ros2/pointcloud_xyz.cdr");
-        let cloud = ros2_pointcloud2::parse(&payload).unwrap();
-        for (quality, keep) in [(0.5, 2usize), (1.0 / 3.0, 3)] {
-            let encoded = encode(&cloud, quality).unwrap();
-            assert_eq!(zenoh_gateway::fields::parse(&encoded).unwrap()["keepEvery"].values(), [keep as f64]);
-            let (positions, _, scale) = decode(&encoded);
-            assert_eq!(positions.len(), 20000usize.div_ceil(keep));
-            for (sent, position) in positions.iter().enumerate() {
-                let index = sent * keep;
-                let expected = [(index % 200) as f32 * 0.05, (index / 200) as f32 * 0.05, (index % 7) as f32 * 0.125];
-                for axis in 0..3 {
-                    assert!((position[axis] - expected[axis]).abs() <= scale / 2.0 + 1e-5, "q {quality} point {index}: {position:?} vs {expected:?}");
-                }
-            }
+    /// Every decoded point is a source point (within the quantization bound), and they come in message order.
+    fn assert_kept_unmoved(cloud: &Points, positions: &[[f32; 3]], scale: f32, tolerance: f64, label: &str) {
+        let mut next = 0;
+        for (sent, position) in positions.iter().enumerate() {
+            let found = cloud.points[next..].iter().position(|point| point.xyz.iter().zip(position).all(|(source, decoded)| (*decoded as f64 - source).abs() <= scale as f64 / 2.0 + tolerance));
+            let offset = found.unwrap_or_else(|| panic!("{label}: sent point {sent} {position:?} isn't a source point after {next}"));
+            next += offset + 1;
         }
     }
 
     #[test]
+    fn thinning_keeps_source_points_unmoved_within_budget() {
+        let payload = fixture("ros2/pointcloud_xyz.cdr");
+        let cloud = read_points(&ros2_pointcloud2::parse(&payload).unwrap()).unwrap();
+        for (quality, keep) in [(0.5, 2usize), (1.0 / 3.0, 3), (0.0, MAX_KEEP_EVERY as usize)] {
+            let encoded = encode_points(&cloud, quality);
+            let (positions, _, scale) = decode(&encoded);
+            let budget = 20000usize.div_ceil(keep) as f64;
+            assert!((positions.len() as f64 - budget).abs() <= BUDGET_SLACK * budget, "q {quality}: {} points for a budget of {budget}", positions.len());
+            let reported = zenoh_gateway::fields::parse(&encoded).unwrap()["keepEvery"].values()[0];
+            assert!((reported - keep as f64).abs() <= 1.0, "q {quality}: keepEvery {reported}");
+            assert_kept_unmoved(&cloud, &positions, scale, 1e-5, &format!("q {quality}"));
+        }
+    }
+
+    #[test]
+    fn thinning_spreads_points_over_space() {
+        // a ring-ordered scan: 16 rings of 1250 points, ring r at radius 1 + r; 1-in-16 in message order keeps every
+        // 16th point of each ring (the outer rings get as few points per metre as the inner ones get per 16 cm)
+        let points: Vec<Point> = (0..16)
+            .flat_map(|ring| (0..1250).map(move |step| {
+                let angle = step as f64 / 1250.0 * std::f64::consts::TAU;
+                let radius = 1.0 + ring as f64;
+                Point { xyz: [radius * angle.cos(), radius * angle.sin(), 0.0], intensity: 0.0 }
+            }))
+            .collect();
+        let cloud = Points { points, has_intensity: false };
+        let (positions, _, _) = decode(&encode_points(&cloud, 0.25));
+        // nearest kept neighbour of each kept point: the grid evens out the spacing across rings
+        let spacing = |positions: &[[f32; 3]]| -> (f64, f64) {
+            let nearest: Vec<f64> = positions.iter().enumerate().map(|(index, a)| positions.iter().enumerate().filter(|(other, _)| *other != index).map(|(_, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt() as f64).fold(f64::INFINITY, f64::min)).collect();
+            (nearest.iter().copied().fold(f64::INFINITY, f64::min), nearest.iter().copied().fold(0.0, f64::max))
+        };
+        let (closest, farthest) = spacing(&positions);
+        let stride: Vec<[f32; 3]> = cloud.points.iter().step_by(4).map(|point| point.xyz.map(|value| value as f32)).collect();
+        let (stride_closest, stride_farthest) = spacing(&stride);
+        assert!(farthest / closest < stride_farthest / stride_closest, "grid {closest:.3}..{farthest:.3} vs stride {stride_closest:.3}..{stride_farthest:.3}");
+    }
+
+    #[test]
     fn units_do_not_matter() {
-        // the same cloud in mm, m and km: same points kept, same error relative to the cloud's size
+        // the same cloud in mm, m and km: the same number kept, the same error relative to the cloud's size
         let points: Vec<Point> = (0..5000).map(|index| Point { xyz: [(index % 100) as f64, (index / 100) as f64, (index % 7) as f64 * 0.3], intensity: 0.0 }).collect();
+        let mut counts = Vec::new();
         for unit in [1e-3, 1.0, 1e3] {
             let cloud = Points { points: points.iter().map(|point| Point { xyz: point.xyz.map(|value| value * unit), intensity: 0.0 }).collect(), has_intensity: false };
             for quality in [1.0, 0.5, 0.0] {
                 let (positions, _, scale) = decode(&encode_points(&cloud, quality));
-                let keep = keep_every(quality) as usize;
-                assert_eq!(positions.len(), 5000usize.div_ceil(keep), "unit {unit} q {quality}");
-                for (sent, position) in positions.iter().enumerate() {
-                    for (decoded, source) in position.iter().zip(cloud.points[sent * keep].xyz) {
-                        let error = (*decoded as f64 - source).abs();
-                        assert!(error <= scale as f64 / 2.0 + 99.0 * unit * 1e-6, "unit {unit} q {quality} point {sent}: error {error}");
-                    }
-                }
+                counts.push((quality.to_bits(), positions.len()));
+                assert_kept_unmoved(&cloud, &positions, scale, 99.0 * unit * 1e-6, &format!("unit {unit} q {quality}"));
             }
+        }
+        for (quality, count) in &counts {
+            assert!(counts.iter().filter(|(other, _)| other == quality).all(|(_, other)| other == count), "{counts:?}");
         }
     }
 
