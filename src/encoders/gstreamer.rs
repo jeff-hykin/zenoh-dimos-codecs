@@ -174,7 +174,9 @@ static HARDWARE: [Element; 4] = [
 ];
 /// Software, for trying the pipeline on a machine without a hardware encoder.
 static X264: Element = Element { name: "x264enc", upload: "", kbps: true, settings: &[("tune", "zerolatency"), ("speed-preset", "ultrafast"), ("bframes", "0")], keyframe_interval: &["key-int-max"], min_size: (0, 0) };
-const KEYFRAME_SECONDS: f64 = 3.0;
+/// Keyframe at least this often (seconds), on top of the browser's PLI/FIR (what recovers a lost frame): every 3 s,
+/// each keyframe (5-10x a frame) took 0.3-0.5 s to cross a 1 Mbit/s link and held the frames behind it.
+const KEYFRAME_SECONDS: f64 = 60.0;
 /// Frames inside the encoder before `encode` waits for one to come out: hardware encoders take a few frame times
 /// (nvv4l2h264enc ~40 ms on a loaded Orin), so waiting for each frame's own output capped a stream at ~25 fps.
 const MAX_IN_FLIGHT: u64 = 3;

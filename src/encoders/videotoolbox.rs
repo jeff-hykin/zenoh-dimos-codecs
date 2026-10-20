@@ -92,7 +92,9 @@ const CODEC_H264: u32 = u32::from_be_bytes(*b"avc1");
 const PIXEL_FORMAT_NV12: i32 = i32::from_be_bytes(*b"420v");
 const CF_NUMBER_SINT32: isize = 3;
 const CF_NUMBER_FLOAT64: isize = 6;
-const KEYFRAME_SECONDS: f64 = 3.0;
+/// Keyframe at least this often (seconds), on top of the browser's PLI/FIR (what recovers a lost frame): every 3 s,
+/// each keyframe (5-10x a frame) took 0.3-0.5 s to cross a 1 Mbit/s link and held the frames behind it.
+const KEYFRAME_SECONDS: f64 = 60.0;
 
 /// An owned CoreFoundation object, released on drop.
 struct Owned(CFTypeRef);
