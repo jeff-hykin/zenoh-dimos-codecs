@@ -11,7 +11,7 @@ pub struct Ros2PointCloud2;
 /// Parses the message, zero-copy over `payload`.
 pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     let mut cdr = Cdr::new(payload)?;
-    cdr.skip_header()?;
+    let header = cdr.header()?;
     let height = cdr.u32()?;
     let width = cdr.u32()?;
     let field_count = cdr.u32()? as usize;
@@ -28,7 +28,7 @@ pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     let point_step = cdr.u32()?;
     let row_step = cdr.u32()?;
     let data = cdr.byte_sequence()?;
-    Ok(PointCloud { height, width, fields, big_endian, point_step, row_step, data })
+    Ok(PointCloud { header, height, width, fields, big_endian, point_step, row_step, data })
 }
 
 impl MessageEncoding for Ros2PointCloud2 {

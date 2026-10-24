@@ -14,14 +14,14 @@ pub struct Ros2Image;
 /// Parses the message, zero-copy over `payload`.
 pub fn parse(payload: &[u8]) -> Result<RawImage<'_>> {
     let mut cdr = Cdr::new(payload)?;
-    cdr.skip_header()?;
+    let header = cdr.header()?;
     let height = cdr.u32()?;
     let width = cdr.u32()?;
     let encoding = cdr.string()?;
     let big_endian = cdr.u8()? != 0;
     let step = cdr.u32()?;
     let data = cdr.byte_sequence()?;
-    Ok(RawImage { width, height, encoding, big_endian, step, data })
+    Ok(RawImage { header, width, height, encoding, big_endian, step, data })
 }
 
 impl MessageEncoding for Ros2Image {

@@ -43,10 +43,10 @@ impl<'a> Lcm<'a> {
         Ok(String::from_utf8_lossy(bytes.strip_suffix(&[0]).unwrap_or(bytes)).into_owned())
     }
 
-    /// std_msgs.Header: i32 seq, std_msgs.Time stamp (i32 sec, i32 nsec), string frame_id
-    pub(crate) fn skip_header(&mut self) -> Result<()> {
-        self.take(12)?;
-        self.string()?;
-        Ok(())
+    /// std_msgs.Header's stamp (s) and frame_id
+    pub(crate) fn header(&mut self) -> Result<crate::codecs::msgs::Header> {
+        self.i32()?;
+        let (sec, nsec) = (self.i32()?, self.i32()?);
+        Ok(crate::codecs::msgs::Header { stamp: sec as f64 + nsec as f64 * 1e-9, frame_id: self.string()? })
     }
 }

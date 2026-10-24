@@ -12,7 +12,7 @@
 //! every Nth point of each scan line: dense near the robot, gaps far away, and whole rings dropped from a
 //! ring-ordered lidar). `keepEvery` is the source count over the kept count, rounded.
 
-use crate::codecs::msgs::{PointCloud, PointField};
+use crate::codecs::msgs::{Header, PointCloud, PointField};
 use anyhow::{Context, Result, bail, ensure};
 use std::borrow::Cow;
 use zenoh_gateway::Fields;
@@ -79,6 +79,8 @@ struct Point {
 pub struct Points {
     points: Vec<Point>,
     has_intensity: bool,
+    /// the cloud's header, sent with it: one topic can carry clouds in different frames
+    header: Header,
 }
 
 /// Every finite point of the cloud, honoring offsets, point_step, row_step and endianness.
@@ -104,7 +106,7 @@ pub fn read_points(cloud: &PointCloud) -> Result<Points> {
             }
         }
     }
-    Ok(Points { points, has_intensity: intensity.is_some() })
+    Ok(Points { points, has_intensity: intensity.is_some(), header: cloud.header.clone() })
 }
 
 /// About `points.len() / keep_every` of the points, in message order: the first in each cell of a voxel grid whose cell
@@ -210,7 +212,7 @@ pub fn encode_points(cloud: &Points, quality: f64) -> Vec<u8> {
         .iter()
         .flat_map(|point| point.xyz.into_iter().zip(origin).map(|(value, axis_origin)| ((value - axis_origin as f64) / scale as f64).round().clamp(-QUANT_MAX, QUANT_MAX) as i16))
         .collect();
-    let fields = Fields::new()
+    let fields = cloud.header.add_to(Fields::new())
         .scalar("version", VERSION)
         .scalar("count", points.len() as u32)
         .scalar("sourceCount", source_count as u32)
@@ -246,6 +248,17 @@ mod tests {
     }
 
     #[test]
+    fn header_rides_along() {
+        for (parse, file) in [(ros2_pointcloud2::parse as Parse, "ros2/pointcloud_xyz.cdr"), (dimos_lcm_pointcloud2::parse, "dimos/pointcloud_xyzi.bin")] {
+            let payload = fixture(file);
+            let cloud = parse(&payload).unwrap();
+            let fields = zenoh_gateway::fields::parse(&encode(&cloud, 0.5).unwrap()).unwrap();
+            assert_eq!(fields["frameId"].text(), Some(cloud.header.frame_id.as_str()), "{file}");
+            assert_eq!(fields["stamp"].values(), [cloud.header.stamp], "{file}");
+        }
+    }
+
+    #[test]
     fn full_quality_within_bound() {
         for (parse, file, intensity) in [(ros2_pointcloud2::parse as Parse, "ros2/pointcloud_xyz.cdr", false), (dimos_lcm_pointcloud2::parse, "dimos/pointcloud_xyzi.bin", true)] {
             let payload = fixture(file);
@@ -275,7 +288,7 @@ mod tests {
             (seed >> 11) as f64 / (1u64 << 53) as f64
         };
         let points = (0..20000).map(|index| Point { xyz: [index as f64 * 0.001 + noise(), noise() * 5.0, noise()], intensity: 0.0 }).collect();
-        let cloud = Points { points, has_intensity: false };
+        let cloud = Points { points, has_intensity: false, header: Header::default() };
         let [full, half, lowest] = [1.0, 0.5, 0.0].map(|quality| encode_points(&cloud, quality));
         assert!(half.len() * 4 < full.len() * 3 && lowest.len() < half.len(), "{} / {} / {}", full.len(), half.len(), lowest.len());
         let count = zenoh_gateway::fields::parse(&encode_points(&cloud, 0.5)).unwrap()["count"].values()[0];
@@ -324,7 +337,7 @@ mod tests {
                 Point { xyz: [radius * angle.cos(), radius * angle.sin(), 0.0], intensity: 0.0 }
             }))
             .collect();
-        let cloud = Points { points, has_intensity: false };
+        let cloud = Points { points, has_intensity: false, header: Header::default() };
         let (positions, _, _) = decode(&encode_points(&cloud, 0.25));
         // nearest kept neighbour of each kept point: the grid evens out the spacing across rings
         let spacing = |positions: &[[f32; 3]]| -> (f64, f64) {
@@ -343,7 +356,7 @@ mod tests {
         let points: Vec<Point> = (0..5000).map(|index| Point { xyz: [(index % 100) as f64, (index / 100) as f64, (index % 7) as f64 * 0.3], intensity: 0.0 }).collect();
         let mut counts = Vec::new();
         for unit in [1e-3, 1.0, 1e3] {
-            let cloud = Points { points: points.iter().map(|point| Point { xyz: point.xyz.map(|value| value * unit), intensity: 0.0 }).collect(), has_intensity: false };
+            let cloud = Points { points: points.iter().map(|point| Point { xyz: point.xyz.map(|value| value * unit), intensity: 0.0 }).collect(), has_intensity: false, header: Header::default() };
             for quality in [1.0, 0.5, 0.0] {
                 let (positions, _, scale) = decode(&encode_points(&cloud, quality));
                 counts.push((quality.to_bits(), positions.len()));
@@ -371,7 +384,7 @@ mod tests {
             data.extend_from_slice(&[0; 6]);
         }
         data.extend_from_slice(&[0; 4]);
-        let cloud = PointCloud { height: 1, width: 3, fields, big_endian: true, point_step: 20, row_step: 64, data: &data };
+        let cloud = PointCloud { header: Header { stamp: 0.0, frame_id: "lidar".into() }, height: 1, width: 3, fields, big_endian: true, point_step: 20, row_step: 64, data: &data };
         let (positions, intensity, scale) = decode(&encode(&cloud, 1.0).unwrap());
         assert!(intensity.is_none());
         assert_eq!(positions.len(), 2);

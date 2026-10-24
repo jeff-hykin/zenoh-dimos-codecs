@@ -17,7 +17,7 @@ pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     let field_count = lcm.length()?;
     ensure!(field_count <= 1024, "PointCloud2 with {field_count} fields");
     let data_length = lcm.length()?;
-    lcm.skip_header()?;
+    let header = lcm.header()?;
     let height = lcm.i32()? as u32;
     let width = lcm.i32()? as u32;
     let mut fields = Vec::with_capacity(field_count);
@@ -32,7 +32,7 @@ pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     let point_step = lcm.i32()? as u32;
     let row_step = lcm.i32()? as u32;
     let data = lcm.take(data_length)?;
-    Ok(PointCloud { height, width, fields, big_endian, point_step, row_step, data })
+    Ok(PointCloud { header, height, width, fields, big_endian, point_step, row_step, data })
 }
 
 impl MessageEncoding for DimosLcmPointCloud2 {

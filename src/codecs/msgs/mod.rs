@@ -32,6 +32,7 @@ pub use ros2_raw_audio::Ros2RawAudio;
 /// `sensor_msgs/Image`
 #[derive(Debug)]
 pub struct RawImage<'a> {
+    pub header: Header,
     pub width: u32,
     pub height: u32,
     pub encoding: String,
@@ -40,9 +41,25 @@ pub struct RawImage<'a> {
     pub data: &'a [u8],
 }
 
+/// A message's std_msgs/Header: what an encoding passes on to the page (the encoded output has no other header)
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Header {
+    /// seconds since the epoch
+    pub stamp: f64,
+    pub frame_id: String,
+}
+
+impl Header {
+    /// `stamp` (s) and `frameId` added to an encoding's fields
+    pub fn add_to(&self, fields: zenoh_gateway::Fields) -> zenoh_gateway::Fields {
+        fields.scalar("stamp", self.stamp).text("frameId", &self.frame_id)
+    }
+}
+
 /// `sensor_msgs/CompressedImage`
 #[derive(Debug)]
 pub struct CompressedImage<'a> {
+    pub header: Header,
     pub format: String,
     pub data: &'a [u8],
 }
@@ -59,6 +76,7 @@ pub struct PointField {
 /// `sensor_msgs/PointCloud2`
 #[derive(Debug)]
 pub struct PointCloud<'a> {
+    pub header: Header,
     pub height: u32,
     pub width: u32,
     pub fields: Vec<PointField>,

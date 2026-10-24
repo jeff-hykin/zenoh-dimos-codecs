@@ -18,10 +18,10 @@ pub struct DimosLcmCompressedImage;
 pub fn parse(payload: &[u8]) -> Result<CompressedImage<'_>> {
     let mut lcm = Lcm::new(payload, LCM_COMPRESSED_IMAGE, "sensor_msgs.CompressedImage")?;
     let data_length = lcm.length()?;
-    lcm.skip_header()?;
+    let header = lcm.header()?;
     let format = lcm.string()?;
     let data = lcm.take(data_length)?;
-    Ok(CompressedImage { format, data })
+    Ok(CompressedImage { header, format, data })
 }
 
 impl MessageEncoding for DimosLcmCompressedImage {

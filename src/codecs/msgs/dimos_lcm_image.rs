@@ -18,14 +18,14 @@ pub struct DimosLcmImage;
 pub fn parse(payload: &[u8]) -> Result<RawImage<'_>> {
     let mut lcm = Lcm::new(payload, LCM_IMAGE, "sensor_msgs.Image")?;
     let data_length = lcm.length()?;
-    lcm.skip_header()?;
+    let header = lcm.header()?;
     let height = lcm.i32()? as u32;
     let width = lcm.i32()? as u32;
     let encoding = lcm.string()?;
     let big_endian = lcm.u8()? != 0;
     let step = lcm.i32()? as u32;
     let data = lcm.take(data_length)?;
-    Ok(RawImage { width, height, encoding, big_endian, step, data })
+    Ok(RawImage { header, width, height, encoding, big_endian, step, data })
 }
 
 impl MessageEncoding for DimosLcmImage {

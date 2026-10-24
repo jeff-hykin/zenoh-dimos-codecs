@@ -3,7 +3,7 @@
 //! `version=2`, `encoding` ("16UC1", "32FC1" or "mono16"), `stride`, `width`, `height`, `sourceWidth`,
 //! `sourceHeight`, `data` (width × height u16 or f32, row-major).
 
-use crate::codecs::msgs::RawImage;
+use crate::codecs::msgs::{Header, RawImage};
 use crate::utils::compressed_image::{self, FileFormat};
 use crate::utils::{jxl, png, raw_pixels};
 use anyhow::{Context, Result, bail, ensure};
@@ -26,6 +26,8 @@ pub enum DepthValues {
 }
 
 pub struct Depth {
+    /// the image's header, sent with it
+    pub header: Header,
     pub width: u32,
     pub height: u32,
     pub encoding: DepthEncoding,
@@ -43,7 +45,7 @@ pub fn from_raw(image: &RawImage) -> Result<Depth> {
                 values.extend(raw_pixels::row(image, y, 2)?.as_chunks::<2>().0.iter().map(|s| raw_pixels::read_u16(s, image.big_endian)));
             }
             let encoding = if image.encoding == "mono16" { DepthEncoding::Mono16 } else { DepthEncoding::U16 };
-            Ok(Depth { width, height, encoding, values: DepthValues::U16(values) })
+            Ok(Depth { header: image.header.clone(), width, height, encoding, values: DepthValues::U16(values) })
         }
         "32FC1" => {
             let mut values = Vec::with_capacity(pixel_count);
@@ -52,14 +54,14 @@ pub fn from_raw(image: &RawImage) -> Result<Depth> {
                     if image.big_endian { f32::from_be_bytes(bytes) } else { f32::from_le_bytes(bytes) }
                 }));
             }
-            Ok(Depth { width, height, encoding: DepthEncoding::F32, values: DepthValues::F32(values) })
+            Ok(Depth { header: image.header.clone(), width, height, encoding: DepthEncoding::F32, values: DepthValues::F32(values) })
         }
         other => bail!("image encoding {other:?} is not depth (supported: 16UC1 32FC1 mono16)"),
     }
 }
 
 /// A 16-bit single-channel png or jxl (also ROS `compressedDepth` png) as lossless u16 depth.
-pub fn from_compressed(data: &[u8], format: &str) -> Result<Depth> {
+pub fn from_compressed(header: &Header, data: &[u8], format: &str) -> Result<Depth> {
     // compressed_depth_image_transport prefixes a 12-byte config header (format enum + 2 floats)
     let data = if format.contains("compressedDepth") {
         ensure!(!format.contains("32FC1"), "compressedDepth 32FC1 is quantized inverse depth, not lossless; unsupported");
@@ -72,7 +74,7 @@ pub fn from_compressed(data: &[u8], format: &str) -> Result<Depth> {
         FileFormat::Jxl => jxl::to_u16(data)?,
         other => bail!("{other:?} can't carry lossless 16-bit depth (use png or jxl)"),
     };
-    Ok(Depth { width, height, encoding: DepthEncoding::U16, values: DepthValues::U16(values) })
+    Ok(Depth { header: header.clone(), width, height, encoding: DepthEncoding::U16, values: DepthValues::U16(values) })
 }
 
 
@@ -108,7 +110,7 @@ pub fn encode(depth: &Depth, quality: f64) -> Vec<u8> {
         DepthEncoding::F32 => "32FC1",
         DepthEncoding::Mono16 => "mono16",
     };
-    let fields = Fields::new()
+    let fields = depth.header.add_to(Fields::new())
         .scalar("version", VERSION)
         .text("encoding", encoding)
         .scalar("stride", stride)
@@ -139,14 +141,14 @@ mod tests {
     #[test]
     fn full_quality_round_trips_and_downscale_is_nearest() {
         let values: Vec<u16> = (0..12u16).collect();
-        let depth = Depth { width: 4, height: 3, encoding: DepthEncoding::U16, values: DepthValues::U16(values.clone()) };
+        let depth = Depth { header: Header::default(), width: 4, height: 3, encoding: DepthEncoding::U16, values: DepthValues::U16(values.clone()) };
         let full = zenoh_gateway::fields::parse(&encode(&depth, 1.0)).unwrap();
         assert_eq!((full["version"].values(), full["encoding"].text(), full["stride"].values()), (vec![2.0], Some("16UC1"), vec![1.0]));
         assert_eq!(full["data"].values(), values.iter().map(|&value| value as f64).collect::<Vec<_>>());
         let half = zenoh_gateway::fields::parse(&encode(&depth, 0.5)).unwrap();
         assert_eq!((half["width"].values(), half["height"].values(), half["sourceWidth"].values()), (vec![2.0], vec![2.0], vec![4.0]));
         assert_eq!(half["data"].values(), [0.0, 2.0, 8.0, 10.0], "every value is a source value, never a blend");
-        let floats = Depth { width: 2, height: 1, encoding: DepthEncoding::F32, values: DepthValues::F32(vec![1.5, f32::NAN]) };
+        let floats = Depth { header: Header::default(), width: 2, height: 1, encoding: DepthEncoding::F32, values: DepthValues::F32(vec![1.5, f32::NAN]) };
         let floats = zenoh_gateway::fields::parse(&encode(&floats, 1.0)).unwrap();
         assert_eq!((floats["encoding"].text(), floats["data"].dtype), (Some("32FC1"), zenoh_gateway::fields::Dtype::F32));
     }
@@ -162,7 +164,7 @@ mod tests {
         assert!(values.iter().enumerate().all(|(i, &v)| v == 0.5 + (i % 320) as f32 / 128.0 + (i / 320) as f32 / 64.0));
         let message_bytes = fixture("ros2/compressed_jxl_depth16.cdr");
         let message = ros2_compressed_image::parse(&message_bytes).unwrap();
-        let DepthValues::U16(values) = from_compressed(message.data, &message.format).unwrap().values else { panic!() };
+        let DepthValues::U16(values) = from_compressed(&message.header, message.data, &message.format).unwrap().values else { panic!() };
         assert!(values.iter().enumerate().all(|(i, &v)| v as usize == 1000 + i % 320 + 4 * (i / 320)), "jxl depth is lossless");
         assert!(from_raw(&ros2_image::parse(&fixture("ros2/image_rgb8.cdr")).unwrap()).is_err());
     }

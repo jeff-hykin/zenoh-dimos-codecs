@@ -51,11 +51,9 @@ impl<'a> Cdr<'a> {
         self.take(length, 1)
     }
 
-    /// std_msgs/Header: builtin_interfaces/Time stamp (i32 sec, u32 nanosec) + string frame_id
-    pub(crate) fn skip_header(&mut self) -> Result<()> {
-        self.u32()?;
-        self.u32()?;
-        self.string()?;
-        Ok(())
+    /// std_msgs/Header's stamp (s) and frame_id
+    pub(crate) fn header(&mut self) -> Result<crate::codecs::msgs::Header> {
+        let (sec, nsec) = (self.u32()? as i32, self.u32()?);
+        Ok(crate::codecs::msgs::Header { stamp: sec as f64 + nsec as f64 * 1e-9, frame_id: self.string()? })
     }
 }

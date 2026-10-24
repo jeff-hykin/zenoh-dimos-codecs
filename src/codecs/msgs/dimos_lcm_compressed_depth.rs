@@ -24,7 +24,7 @@ impl MessageEncoding for DimosLcmCompressedDepth {
 
     fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {
         let message = dimos_lcm_compressed_image::parse(sample.payload)?;
-        Ok(DecodedFrame::data(depth::from_compressed(message.data, &message.format)?))
+        Ok(DecodedFrame::data(depth::from_compressed(&message.header, message.data, &message.format)?))
     }
 
     fn encode(&self, frame: &DecodedFrame, options: &EncodeOptions) -> Result<Vec<u8>> {

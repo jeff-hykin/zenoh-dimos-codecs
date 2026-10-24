@@ -14,10 +14,10 @@ pub struct Ros2CompressedImage;
 /// Parses the message, zero-copy over `payload`.
 pub fn parse(payload: &[u8]) -> Result<CompressedImage<'_>> {
     let mut cdr = Cdr::new(payload)?;
-    cdr.skip_header()?;
+    let header = cdr.header()?;
     let format = cdr.string()?;
     let data = cdr.byte_sequence()?;
-    Ok(CompressedImage { format, data })
+    Ok(CompressedImage { header, format, data })
 }
 
 impl MessageEncoding for Ros2CompressedImage {
