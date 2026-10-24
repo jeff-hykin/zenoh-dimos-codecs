@@ -1,7 +1,7 @@
 //! `sensor_msgs/CompressedImage` from dimos (LCM over zenoh) as video: a JPEG, PNG, WebP or JPEG XL file to a picture for the
 //! video encoder; on the data channel, the file itself or converted (`encodeOptions.format`).
 
-use super::CompressedImage;
+use super::{CompressedImage, Headed};
 use crate::utils::compressed_image::ImageFile;
 use crate::utils::{lcm::Lcm, compressed_image};
 use anyhow::Result;
@@ -41,13 +41,14 @@ impl MessageEncoding for DimosLcmCompressedImage {
     fn decode(&self, sample: &EncodingSample<'_>, channel: Channel) -> Result<DecodedFrame> {
         let message = parse(sample.payload)?;
         Ok(match channel {
-            Channel::Data => DecodedFrame::data(ImageFile::new(message.data, &message.format)?),
-            _ => DecodedFrame::Video(compressed_image::to_video(message.data, &message.format)?),
+            Channel::Data => DecodedFrame::data(Headed { value: ImageFile::new(message.data, &message.format)?, header: message.header }),
+            _ => DecodedFrame::Video(message.header.add_to_video(compressed_image::to_video(message.data, &message.format)?)),
         })
     }
 
     fn encode(&self, frame: &DecodedFrame, options: &EncodeOptions) -> Result<Vec<u8>> {
-        frame.downcast::<ImageFile>()?.encode(options)
+        let headed = frame.downcast::<Headed<ImageFile>>()?;
+        compressed_image::with_header(headed.value.encode(options)?, &headed.header, options)
     }
 
     fn estimated_bytes(&self, payload_bytes: usize, options: &EncodeOptions) -> f64 {

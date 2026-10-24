@@ -46,7 +46,11 @@ Image encodings also go on the data channel (`channel: "data"`), as a file, with
 `"passthrough"` (compressed images' default: the file as sent), `"jpeg"` (raw images' default; re-encoded at the
 allocator's quality, so it shrinks when the link is squeezed, or the file itself when it already is a JPEG and the
 quality is 1) or `"png"` (lossless). The page gets the file in `msg.bytes` (`createImageBitmap(new Blob([msg.bytes]))`
-gives its pixels). Depth, point clouds and audio take no options.
+gives its pixels). With `encodeOptions.header: true` the file comes with its message's header instead, as a fields
+message: `msg.decoded` is `{stamp, frameId, format, data}` (`format` `"jpeg"`, `"png"`, `"webp"` or `"jxl"`, `data` the
+file's bytes). On a video channel each picture's header rides its frame's metadata (zenoh-gateway 0.5.31+):
+`msg.video.stamp`, `msg.video.frameId`, or `sub.videoFrameInfo(rtpTimestamp)` for the frame on screen.
+Depth, point clouds and audio take no options.
 
 To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_gateway::MessageEncoding` impl named after
 the file, listed in `src/codecs/msgs/mod.rs` and `codecs::all()` (a test checks every file is registered). Shared

@@ -64,6 +64,24 @@ mod tests {
         assert_eq!((image.width(), image.height()), (320, 240));
     }
 
+    #[test]
+    fn video_pictures_carry_their_message_s_header() {
+        use crate::codecs::msgs::{dimos_lcm_compressed_image, dimos_lcm_image, ros2_compressed_image, ros2_image};
+        let cases = [
+            ("dimos_lcm_image", "dimos/image_rgb8.bin", dimos_lcm_image::parse(&fixture("dimos/image_rgb8.bin")).unwrap().header),
+            ("ros2_image", "ros2/image_rgb8.cdr", ros2_image::parse(&fixture("ros2/image_rgb8.cdr")).unwrap().header),
+            ("dimos_lcm_compressed_image", "dimos/compressed_png.bin", dimos_lcm_compressed_image::parse(&fixture("dimos/compressed_png.bin")).unwrap().header),
+            ("ros2_compressed_image", "ros2/compressed_png.cdr", ros2_compressed_image::parse(&fixture("ros2/compressed_png.cdr")).unwrap().header),
+        ];
+        for (name, file, header) in cases {
+            let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
+            let payload = fixture(file);
+            let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
+            let DecodedFrame::Video(image) = codec.decode(&EncodingSample::new("k", &payload, &encoding), Channel::Video(VideoFormat::H264)).unwrap() else { panic!("video expected") };
+            assert_eq!(image.header(), Some((header.stamp, header.frame_id.as_str())), "{name}");
+        }
+    }
+
     /// `name`'s data-channel bytes for `file` with `options` at `quality`, after checking it accepts them.
     fn on_data(name: &str, file: &str, options: serde_json::Value, quality: f64) -> Result<Vec<u8>, String> {
         let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
@@ -73,6 +91,29 @@ mod tests {
         let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
         let frame = codec.decode(&EncodingSample::new("k", &payload, &encoding), Channel::Data).map_err(|error| error.to_string())?;
         codec.encode(&frame, &EncodeOptions { quality, options }).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn pictures_on_the_data_channel_carry_their_header_when_asked() {
+        use crate::codecs::msgs::{ros2_compressed_image, ros2_image};
+        let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
+        let headed = |name: &str, file: &str, options: serde_json::Value| {
+            let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
+            let options: serde_json::Map<String, serde_json::Value> = serde_json::from_value(options).unwrap();
+            assert_eq!(codec.output_on(Channel::Data, &options), Ok(EncodingOutput::Fields), "{name}: fields with header");
+            let payload = fixture(file);
+            let frame = codec.decode(&EncodingSample::new("k", &payload, &encoding), Channel::Data).unwrap();
+            zenoh_gateway::fields::parse(&codec.encode(&frame, &EncodeOptions { quality: 1.0, options }).unwrap()).unwrap()
+        };
+        let compressed = headed("ros2_compressed_image", "ros2/compressed_png.cdr", serde_json::json!({"header": true}));
+        let header = ros2_compressed_image::parse(&fixture("ros2/compressed_png.cdr")).unwrap().header;
+        assert_eq!((compressed["frameId"].text(), compressed["stamp"].values(), compressed["format"].text()), (Some(header.frame_id.as_str()), vec![header.stamp], Some("png")));
+        assert_eq!(compressed["data"].values().iter().map(|byte| *byte as u8).collect::<Vec<_>>(), fixture("compressed/pattern.png"), "the file as sent, inside");
+        let raw = headed("ros2_image", "ros2/image_rgb8.cdr", serde_json::json!({"format": "png", "header": true}));
+        assert_eq!(raw["frameId"].text(), Some(ros2_image::parse(&fixture("ros2/image_rgb8.cdr")).unwrap().header.frame_id.as_str()));
+        assert_eq!(raw["format"].text(), Some("png"));
+        assert_eq!(on_data("ros2_compressed_image", "ros2/compressed_png.cdr", serde_json::json!({"header": false}), 1.0).unwrap(), fixture("compressed/pattern.png"), "header false: the bare file");
+        assert!(on_data("ros2_image", "ros2/image_rgb8.cdr", serde_json::json!({"header": 1}), 1.0).is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Compressed images (`sensor_msgs/CompressedImage` data, or a dimos Image carrying a file): the format from the
 //! bytes, then that format's decoder.
 
+use crate::codecs::msgs::Header;
 use crate::utils::raw_pixels::Rgb8;
 use crate::utils::{jpeg, jxl, png, webp};
 use anyhow::{Result, bail};
@@ -13,6 +14,17 @@ pub enum FileFormat {
     Png,
     Webp,
     Jxl,
+}
+
+impl FileFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileFormat::Jpeg => "jpeg",
+            FileFormat::Png => "png",
+            FileFormat::Webp => "webp",
+            FileFormat::Jxl => "jxl",
+        }
+    }
 }
 
 /// The file format, from magic bytes first and the message's format string second.
@@ -50,10 +62,11 @@ pub enum FileWanted {
 }
 
 impl FileWanted {
-    /// `encodeOptions.format`, checked: `passthrough` only where `passthrough_default` (a file to pass), and no other option.
+    /// `encodeOptions.format`, checked: `passthrough` only where `passthrough_default` (a file to pass), and no other option
+    /// but `header` ([`header_wanted`]).
     pub fn from_options(options: &Map<String, Value>, passthrough_default: bool) -> Result<Self, String> {
-        if let Some(other) = options.keys().find(|key| *key != "format") {
-            return Err(format!("unknown encodeOptions {other:?} (format only)"));
+        if let Some(other) = options.keys().find(|key| *key != "format" && *key != "header") {
+            return Err(format!("unknown encodeOptions {other:?} (format and header only)"));
         }
         Ok(match (options.get("format").and_then(Value::as_str), options.get("format")) {
             (Some("passthrough"), _) | (None, None) if passthrough_default => FileWanted::Passthrough,
@@ -65,13 +78,33 @@ impl FileWanted {
     }
 }
 
+/// `encodeOptions.header` (default false): the file goes inside a fields message with its message's header,
+/// `{stamp, frameId, format, data}`, instead of as bare bytes (which have no room for one).
+pub fn header_wanted(options: &Map<String, Value>) -> Result<bool, String> {
+    match options.get("header") {
+        None => Ok(false),
+        Some(Value::Bool(wanted)) => Ok(*wanted),
+        Some(other) => Err(format!("encodeOptions.header must be true or false, got {other}")),
+    }
+}
+
+/// The data channel's bytes for `file`: the file itself, or with `encodeOptions.header` a fields message
+/// `{stamp, frameId, format (jpeg, png, webp or jxl), data (the file)}`.
+pub fn with_header(file: Vec<u8>, header: &Header, options: &EncodeOptions) -> Result<Vec<u8>> {
+    if !header_wanted(&options.options).map_err(anyhow::Error::msg)? {
+        return Ok(file);
+    }
+    let format = sniff_format(&file, "")?;
+    Ok(header.add_to(zenoh_gateway::Fields::new()).text("format", format.as_str()).array("data", &file).build())
+}
+
 /// [`MessageEncoding::output_on`](zenoh_gateway::MessageEncoding::output_on) for a picture encoding: pictures on any video
-/// channel (no options), files on the data channel ([`FileWanted`]).
+/// channel (no options), files on the data channel ([`FileWanted`]; fields with [`header_wanted`]).
 pub fn output_on(name: &str, channel: Channel, options: &Map<String, Value>, passthrough_default: bool) -> Result<EncodingOutput, String> {
     match channel {
         Channel::Video(_) if options.is_empty() => Ok(EncodingOutput::Video),
         Channel::Video(_) => Err(format!("{name} takes no encodeOptions on video channels but quality")),
-        Channel::Data => FileWanted::from_options(options, passthrough_default).map(|_| EncodingOutput::Data),
+        Channel::Data => FileWanted::from_options(options, passthrough_default).and_then(|_| header_wanted(options)).map(|header| if header { EncodingOutput::Fields } else { EncodingOutput::Data }),
         Channel::Audio => Err(format!("{name} sends pictures, not audio")),
     }
 }

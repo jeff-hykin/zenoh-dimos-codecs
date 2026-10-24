@@ -1,5 +1,5 @@
 //! One codec per message type: each file parses its message (ROS 2: CDR, dimos: LCM) and implements
-//! [`Codec`](zenoh_gateway::Codec). Only the fields a codec needs are kept; headers (stamp, frame_id) are skipped.
+//! [`Codec`](zenoh_gateway::Codec). Only the fields a codec needs are kept, and its header (stamp, frame_id), which goes to the page.
 
 pub mod dimos_lcm_compressed_depth;
 pub mod dimos_lcm_compressed_image;
@@ -54,6 +54,16 @@ impl Header {
     pub fn add_to(&self, fields: zenoh_gateway::Fields) -> zenoh_gateway::Fields {
         fields.scalar("stamp", self.stamp).text("frameId", &self.frame_id)
     }
+    /// the picture with this header, which the gateway sends with its frame's metadata (`msg.video.stamp`, `msg.video.frameId`)
+    pub fn add_to_video(&self, image: zenoh_gateway::VideoImage) -> zenoh_gateway::VideoImage {
+        image.with_header(self.stamp, self.frame_id.clone())
+    }
+}
+
+/// A data-channel decoded form with its message's header (for `encodeOptions.header`).
+pub struct Headed<T> {
+    pub header: Header,
+    pub value: T,
 }
 
 /// `sensor_msgs/CompressedImage`
