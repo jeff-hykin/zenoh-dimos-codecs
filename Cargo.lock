@@ -5110,7 +5110,7 @@ dependencies = [
 
 [[package]]
 name = "zenoh-dimos-codecs"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "anyhow",
  "image-webp",
@@ -5147,9 +5147,9 @@ dependencies = [
 
 [[package]]
 name = "zenoh-gateway"
-version = "0.5.31"
+version = "0.5.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "177aa3470763172469f26f623d0abe0312b0780d9e257f6bd78f769dabddd723"
+checksum = "1c72e40263f93125b6be3e5a582a56343cd5870ed30c0f7b3cc4a9e6fd729502"
 dependencies = [
  "anyhow",
  "async-trait",
