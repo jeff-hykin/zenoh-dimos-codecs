@@ -12,13 +12,12 @@ pub struct Ros2RawAudio;
 pub fn parse(payload: &[u8]) -> Result<RawAudio<'_>> {
     let mut cdr = Cdr::new(payload)?;
     // builtin_interfaces/Time timestamp
-    cdr.u32()?;
-    cdr.u32()?;
+    let (sec, nsec) = (cdr.u32()? as i32, cdr.u32()?);
     let data = cdr.byte_sequence()?;
     let format = cdr.string()?;
     let sample_rate = cdr.u32()?;
     let channels = cdr.u32()?;
-    Ok(RawAudio { data, format, sample_rate, channels })
+    Ok(RawAudio { header: super::Header::new(sec, nsec, String::new(), None), data, format, sample_rate, channels })
 }
 
 impl MessageEncoding for Ros2RawAudio {
@@ -28,6 +27,11 @@ impl MessageEncoding for Ros2RawAudio {
 
     fn output(&self) -> EncodingOutput {
         EncodingOutput::Audio
+    }
+
+    /// the message's timestamp, which the gateway sends with each sample's frame
+    fn header(&self, sample: &EncodingSample<'_>) -> Option<zenoh_gateway::MessageHeader> {
+        parse(sample.payload).ok().map(|message| message.header.to_gateway())
     }
 
     fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {

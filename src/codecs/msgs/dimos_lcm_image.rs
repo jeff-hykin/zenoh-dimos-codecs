@@ -42,6 +42,11 @@ impl MessageEncoding for DimosLcmImage {
         compressed_image::output_on(self.name(), channel, options, false)
     }
 
+    /// the message's header, which the gateway sends with whatever this makes of it
+    fn header(&self, sample: &EncodingSample<'_>) -> Option<zenoh_gateway::MessageHeader> {
+        parse(sample.payload).ok().map(|message| message.header.to_gateway())
+    }
+
     fn decode(&self, sample: &EncodingSample<'_>, channel: Channel) -> Result<DecodedFrame> {
         let image = parse(sample.payload)?;
         Ok(match channel {

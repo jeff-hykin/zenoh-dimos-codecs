@@ -46,11 +46,15 @@ Image encodings also go on the data channel (`channel: "data"`), as a file, with
 `"passthrough"` (compressed images' default: the file as sent), `"jpeg"` (raw images' default; re-encoded at the
 allocator's quality, so it shrinks when the link is squeezed, or the file itself when it already is a JPEG and the
 quality is 1) or `"png"` (lossless). The page gets the file in `msg.bytes` (`createImageBitmap(new Blob([msg.bytes]))`
-gives its pixels). With `encodeOptions.header: true` the file comes with its message's header instead, as a fields
-message: `msg.decoded` is `{stamp, frameId, format, data}` (`format` `"jpeg"`, `"png"`, `"webp"` or `"jxl"`, `data` the
-file's bytes). On a video channel each picture's header rides its frame's metadata (zenoh-gateway 0.5.31+):
-`msg.video.stamp`, `msg.video.frameId`, or `sub.videoFrameInfo(rtpTimestamp)` for the frame on screen.
-Depth, point clouds and audio take no options.
+gives its pixels). Depth, point clouds and audio take no options.
+
+Every codec reads its message's header (`MessageEncoding::header`: exact `sec`/`nanosec`, `frame_id`, dimos LCM's
+`seq`; audio its `timestamp`), and zenoh-gateway 0.5.32+ sends it, with the zenoh sample's encoding and attachment,
+alongside whatever the codec made of the message on every channel: `msg.header` (`{ stamp, sec, nanosec, frameId, seq? }`),
+`msg.encoding`, `msg.attachment`; `subscribe(key, { metadata: false })` goes without. On video it is also
+`msg.video.stamp` / `msg.video.frameId`, and `sub.videoFrameInfo(rtpTimestamp)` for the frame on screen. Point clouds and
+depth also keep `stamp` and `frameId` in their fields (0.3.7+), and `encodeOptions.header: true` still wraps a
+data-channel image file with its header as a fields message, `msg.decoded` `{stamp, frameId, format, data}` (0.3.8+).
 
 To add a message type: a new file in `src/codecs/msgs/` with its parser and a `zenoh_gateway::MessageEncoding` impl named after
 the file, listed in `src/codecs/msgs/mod.rs` and `codecs::all()` (a test checks every file is registered). Shared

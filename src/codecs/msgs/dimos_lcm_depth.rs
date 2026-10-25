@@ -21,6 +21,11 @@ impl MessageEncoding for DimosLcmDepth {
         Compress::Zstd
     }
 
+    /// the message's header, which the gateway sends with whatever this makes of it
+    fn header(&self, sample: &EncodingSample<'_>) -> Option<zenoh_gateway::MessageHeader> {
+        dimos_lcm_image::parse(sample.payload).ok().map(|message| message.header.to_gateway())
+    }
+
     fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {
         Ok(DecodedFrame::data(depth::from_raw(&dimos_lcm_image::parse(sample.payload)?)?))
     }

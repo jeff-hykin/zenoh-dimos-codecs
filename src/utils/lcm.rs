@@ -43,10 +43,10 @@ impl<'a> Lcm<'a> {
         Ok(String::from_utf8_lossy(bytes.strip_suffix(&[0]).unwrap_or(bytes)).into_owned())
     }
 
-    /// std_msgs.Header's stamp (s) and frame_id
+    /// std_msgs.Header: seq, stamp and frame_id
     pub(crate) fn header(&mut self) -> Result<crate::codecs::msgs::Header> {
-        self.i32()?;
+        let seq = self.i32()? as u32;
         let (sec, nsec) = (self.i32()?, self.i32()?);
-        Ok(crate::codecs::msgs::Header { stamp: sec as f64 + nsec as f64 * 1e-9, frame_id: self.string()? })
+        Ok(crate::codecs::msgs::Header::new(sec, nsec as u32, self.string()?, Some(seq)))
     }
 }

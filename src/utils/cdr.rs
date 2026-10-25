@@ -51,9 +51,9 @@ impl<'a> Cdr<'a> {
         self.take(length, 1)
     }
 
-    /// std_msgs/Header's stamp (s) and frame_id
+    /// std_msgs/Header: stamp and frame_id
     pub(crate) fn header(&mut self) -> Result<crate::codecs::msgs::Header> {
         let (sec, nsec) = (self.u32()? as i32, self.u32()?);
-        Ok(crate::codecs::msgs::Header { stamp: sec as f64 + nsec as f64 * 1e-9, frame_id: self.string()? })
+        Ok(crate::codecs::msgs::Header::new(sec, nsec, self.string()?, None))
     }
 }

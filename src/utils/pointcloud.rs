@@ -384,7 +384,7 @@ mod tests {
             data.extend_from_slice(&[0; 6]);
         }
         data.extend_from_slice(&[0; 4]);
-        let cloud = PointCloud { header: Header { stamp: 0.0, frame_id: "lidar".into() }, height: 1, width: 3, fields, big_endian: true, point_step: 20, row_step: 64, data: &data };
+        let cloud = PointCloud { header: Header::new(0, 0, "lidar".into(), None), height: 1, width: 3, fields, big_endian: true, point_step: 20, row_step: 64, data: &data };
         let (positions, intensity, scale) = decode(&encode(&cloud, 1.0).unwrap());
         assert!(intensity.is_none());
         assert_eq!(positions.len(), 2);

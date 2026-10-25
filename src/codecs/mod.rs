@@ -65,6 +65,26 @@ mod tests {
     }
 
     #[test]
+    fn every_codec_reads_its_message_s_exact_header() {
+        let cases = [
+            ("dimos_lcm_image", "dimos/image_rgb8.bin"), ("dimos_lcm_compressed_image", "dimos/compressed_png.bin"), ("dimos_lcm_depth", "dimos/depth_16UC1.bin"),
+            ("dimos_lcm_compressed_depth", "dimos/compressed_jxl_depth16.bin"), ("dimos_lcm_pointcloud2", "dimos/pointcloud_xyzi.bin"),
+            ("ros2_image", "ros2/image_rgb8.cdr"), ("ros2_compressed_image", "ros2/compressed_png.cdr"), ("ros2_depth", "ros2/depth_16UC1.cdr"),
+            ("ros2_compressed_depth", "ros2/compressed_jxl_depth16.cdr"), ("ros2_pointcloud2", "ros2/pointcloud_xyz.cdr"),
+        ];
+        for (name, file) in cases {
+            let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
+            let (payload, encoding) = (fixture(file), zenoh_gateway::zenoh::bytes::Encoding::default());
+            let header = codec.header(&EncodingSample::new("k", &payload, &encoding)).unwrap_or_else(|| panic!("{name}: no header"));
+            // (the fixtures' stamp, which an f64 of seconds can't hold exactly once nanoseconds aren't round)
+            assert_eq!((header.sec, header.nanosec, header.seq.is_some()), (1_700_000_000, 500_000_000, name.starts_with("dimos")), "{name}");
+            assert!(!header.frame_id.is_empty(), "{name}: frame id");
+        }
+        let garbage = zenoh_gateway::zenoh::bytes::Encoding::default();
+        assert!(all().iter().all(|codec| codec.header(&EncodingSample::new("k", b"nope", &garbage)).is_none()), "no header from what doesn't parse");
+    }
+
+    #[test]
     fn video_pictures_carry_their_message_s_header() {
         use crate::codecs::msgs::{dimos_lcm_compressed_image, dimos_lcm_image, ros2_compressed_image, ros2_image};
         let cases = [

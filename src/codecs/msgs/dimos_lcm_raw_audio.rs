@@ -16,12 +16,12 @@ pub fn parse(payload: &[u8]) -> Result<RawAudio<'_>> {
     let mut lcm = Lcm::new(payload, LCM_RAW_AUDIO, "foxglove_msgs.RawAudio")?;
     let data_length = lcm.length()?;
     // builtin_interfaces.Time timestamp
-    lcm.take(8)?;
+    let (sec, nsec) = (lcm.i32()?, lcm.i32()?);
     let data = lcm.take(data_length)?;
     let format = lcm.string()?;
     let sample_rate = lcm.i32()? as u32;
     let channels = lcm.i32()? as u32;
-    Ok(RawAudio { data, format, sample_rate, channels })
+    Ok(RawAudio { header: super::Header::new(sec, nsec as u32, String::new(), None), data, format, sample_rate, channels })
 }
 
 impl MessageEncoding for DimosLcmRawAudio {
@@ -31,6 +31,11 @@ impl MessageEncoding for DimosLcmRawAudio {
 
     fn output(&self) -> EncodingOutput {
         EncodingOutput::Audio
+    }
+
+    /// the message's timestamp, which the gateway sends with each sample's frame
+    fn header(&self, sample: &EncodingSample<'_>) -> Option<zenoh_gateway::MessageHeader> {
+        parse(sample.payload).ok().map(|message| message.header.to_gateway())
     }
 
     fn decode(&self, sample: &EncodingSample<'_>, _channel: Channel) -> Result<DecodedFrame> {
