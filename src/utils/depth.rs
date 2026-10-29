@@ -9,7 +9,7 @@ use crate::utils::{jxl, png, raw_pixels};
 use anyhow::{Context, Result, bail, ensure};
 use zenoh_gateway::Fields;
 
-/// Depth wire encodings (see SPEC "Wire formats": depth header byte 1).
+/// Depth encodings, sent as the `encoding` field (see README "Wire formats").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DepthEncoding {
     /// 16UC1: u16, millimeters by convention
@@ -77,7 +77,6 @@ pub fn from_compressed(header: &Header, data: &[u8], format: &str) -> Result<Dep
     Ok(Depth { header: header.clone(), width, height, encoding: DepthEncoding::U16, values: DepthValues::U16(values) })
 }
 
-
 pub const VERSION: u8 = 2;
 
 /// Integer downscale factor for a quality: 1 at quality 1, up to 8 at quality 0.
@@ -101,7 +100,6 @@ pub fn encode(depth: &Depth, quality: f64) -> Vec<u8> {
     let stride = stride(quality);
     let width = depth.width.div_ceil(stride);
     let height = depth.height.div_ceil(stride);
-    // every stride-th pixel of every stride-th row
     fn sample<T: Copy>(values: &[T], source_width: u32, (width, height, stride): (u32, u32, u32)) -> Vec<T> {
         (0..height).flat_map(|y| (0..width).map(move |x| values[(y * stride) as usize * source_width as usize + (x * stride) as usize])).collect()
     }

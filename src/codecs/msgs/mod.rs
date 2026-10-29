@@ -1,5 +1,5 @@
 //! One codec per message type: each file parses its message (ROS 2: CDR, dimos: LCM) and implements
-//! [`Codec`](zenoh_gateway::Codec). Only the fields a codec needs are kept, and its header (stamp, frame_id), which goes to the page.
+//! [`MessageEncoding`](zenoh_gateway::MessageEncoding). Only the fields a codec needs are kept, and its header (stamp, frame_id), which goes to the page.
 
 pub mod dimos_lcm_compressed_depth;
 pub mod dimos_lcm_compressed_image;
