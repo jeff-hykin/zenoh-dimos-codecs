@@ -174,14 +174,14 @@ static HARDWARE: [Element; 4] = [
 ];
 /// Software, for trying the pipeline on a machine without a hardware encoder.
 static X264: Element = Element { name: "x264enc", upload: "", kbps: true, settings: &[("tune", "zerolatency"), ("speed-preset", "ultrafast"), ("bframes", "0")], keyframe_interval: &["key-int-max"], min_size: (0, 0) };
-/// Keyframe at least this often (seconds), on top of the browser's PLI/FIR (what recovers a lost frame): every 3 s,
-/// each keyframe (5-10x a frame) took 0.3-0.5 s to cross a 1 Mbit/s link and held the frames behind it.
-const KEYFRAME_SECONDS: f64 = 60.0;
 /// Frames inside the encoder before `encode` waits for one to come out: hardware encoders take a few frame times
 /// (nvv4l2h264enc ~40 ms on a loaded Orin), so waiting for each frame's own output capped a stream at ~25 fps.
 const MAX_IN_FLIGHT: u64 = 3;
-/// How long that wait may last (the first frame's includes the pipeline's start).
+/// How long that wait may last (the first frame's includes the pipeline's start); under zenoh-gateway's default
+/// `encode_timeout` (5 s), so the encode fails here instead of being abandoned on its thread.
 const OUTPUT_TIMEOUT: Duration = Duration::from_secs(3);
+/// A frame rate this many times off the pipeline's rebuilds it: zenoh-gateway's AV1 encoder's `RECONFIGURE_RATIO`.
+const RECONFIGURE_RATIO: f64 = 1.3;
 
 fn c_string(text: &str) -> CString {
     CString::new(text).expect("no NUL in GStreamer names")
@@ -243,7 +243,7 @@ impl Pipeline {
             for (name, value) in element.settings {
                 pipeline.set(name, value);
             }
-            let interval = ((fps * KEYFRAME_SECONDS).ceil() as u32).max(1).to_string();
+            let interval = ((fps * super::KEYFRAME_SECONDS).ceil() as u32).max(1).to_string();
             for name in element.keyframe_interval {
                 pipeline.set(name, &interval);
             }
@@ -396,9 +396,9 @@ impl GstreamerEncoder {
     }
 
     fn probe(&mut self) -> Result<()> {
-        let image = zenoh_gateway::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
+        let (frame, target) = super::probe_frame()?;
         for _ in 0..=MAX_IN_FLIGHT + 1 {
-            if self.encode(&DecodedFrame::Video(image.clone()), &VideoTarget::new(320, 240, 1_000_000, 30.0))?.is_some() {
+            if self.encode(&frame, &target)?.is_some() {
                 return Ok(());
             }
         }
@@ -415,7 +415,7 @@ impl VideoEncoder for GstreamerEncoder {
         let DecodedFrame::Video(image) = frame else { bail!("{} takes pictures, got {frame:?}", self.element.name) };
         let size = at_least((target.width, target.height), self.element.min_size);
         // encoders budget each frame from the caps' rate, so a rate that moves far rebuilds the pipeline
-        let fresh = self.pipeline.as_ref().is_none_or(|pipeline| pipeline.size != size || (pipeline.fps / target.fps).max(target.fps / pipeline.fps) > 1.3);
+        let fresh = self.pipeline.as_ref().is_none_or(|pipeline| pipeline.size != size || (pipeline.fps / target.fps).max(target.fps / pipeline.fps) > RECONFIGURE_RATIO);
         if fresh {
             self.pipeline = Some(Pipeline::new(self.api, self.element, size, target.bitrate_bps, target.fps)?);
         }

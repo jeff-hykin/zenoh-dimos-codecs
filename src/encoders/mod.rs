@@ -29,6 +29,18 @@ use anyhow::{Result, bail};
 use std::str::FromStr;
 use zenoh_gateway::{DecodedFrame, EncodedVideo, H264Encoder, VideoEncoder, VideoFormat, VideoTarget};
 
+/// Keyframe at least this often (seconds), on top of the browser's PLI/FIR: zenoh-gateway's `VideoPolicy::keyframe_interval`
+/// default, for its reason (every 3 s, each keyframe took 0.3-0.5 s to cross a 1 Mbit/s link and held the frames behind it).
+#[cfg(any(all(feature = "videotoolbox", target_os = "macos"), feature = "gstreamer"))]
+const KEYFRAME_SECONDS: f64 = 60.0;
+
+/// The frame and target a hardware encoder must encode to be picked: mid-gray 320x240 at 1 Mbit/s, 30 fps.
+#[cfg(any(all(feature = "videotoolbox", target_os = "macos"), feature = "gstreamer"))]
+fn probe_frame() -> Result<(DecodedFrame, VideoTarget)> {
+    let image = zenoh_gateway::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
+    Ok((DecodedFrame::Video(image), VideoTarget::new(320, 240, 1_000_000, 30.0)))
+}
+
 /// Which encoder to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -99,9 +111,8 @@ fn probe(backend: Backend) -> Result<Selected> {
     match backend {
         #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
         Backend::VideoToolbox => {
-            let mut encoder = videotoolbox::VideoToolboxEncoder::default();
-            let image = zenoh_gateway::VideoImage::i420(320, 240, vec![128; 320 * 240 * 3 / 2])?;
-            encoder.encode(&DecodedFrame::Video(image), &VideoTarget::new(320, 240, 1_000_000, 30.0))?;
+            let (frame, target) = probe_frame()?;
+            videotoolbox::VideoToolboxEncoder::default().encode(&frame, &target)?;
             Ok(Selected {
                 name: "videotoolbox".into(),
                 factory: Some(Box::new(|| Box::new(Fallback::new("videotoolbox", videotoolbox::VideoToolboxEncoder::default())))),

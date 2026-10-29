@@ -92,9 +92,12 @@ const CODEC_H264: u32 = u32::from_be_bytes(*b"avc1");
 const PIXEL_FORMAT_NV12: i32 = i32::from_be_bytes(*b"420v");
 const CF_NUMBER_SINT32: isize = 3;
 const CF_NUMBER_FLOAT64: isize = 6;
-/// Keyframe at least this often (seconds), on top of the browser's PLI/FIR (what recovers a lost frame): every 3 s,
-/// each keyframe (5-10x a frame) took 0.3-0.5 s to cross a 1 Mbit/s link and held the frames behind it.
-const KEYFRAME_SECONDS: f64 = 60.0;
+/// kCMTimeFlags_Valid
+const CMTIME_FLAGS_VALID: u32 = 1;
+/// The lowest frame rate frames are spaced for: zenoh-gateway's own floor (`hz.max(0.1)`).
+const MIN_FPS: f64 = 0.1;
+/// ExpectedFrameRate is a hint to rate control, so a rate jittering by less than this keeps the session's.
+const FPS_CHANGE: f64 = 0.5;
 
 /// An owned CoreFoundation object, released on drop.
 struct Owned(CFTypeRef);
@@ -216,7 +219,7 @@ impl Session {
             let refcon = (&raw const *slot).cast_mut().cast();
             check(VTCompressionSessionCreate(null(), width as i32, height as i32, CODEC_H264, specification.0, source.0, null(), on_output, refcon, &mut raw), "create")?;
             let session = Session { raw, slot, size: (width, height), bitrate_bps, fps };
-            let keyframe_seconds = number_f64(KEYFRAME_SECONDS);
+            let keyframe_seconds = number_f64(super::KEYFRAME_SECONDS);
             for (key, value) in [
                 (kVTCompressionPropertyKey_RealTime, kCFBooleanTrue),
                 (kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel),
@@ -300,14 +303,13 @@ impl VideoEncoder for VideoToolboxEncoder {
             self.session = Some(Session::new(size, target.bitrate_bps, target.fps)?);
         }
         let session = self.session.as_mut().expect("created above");
-        if session.bitrate_bps != target.bitrate_bps || (session.fps - target.fps).abs() > 0.5 {
+        if session.bitrate_bps != target.bitrate_bps || (session.fps - target.fps).abs() > FPS_CHANGE {
             session.set_rate(target.bitrate_bps, target.fps)?;
             (session.bitrate_bps, session.fps) = (target.bitrate_bps, target.fps);
         }
         let i420 = image.to_i420(target.width, target.height)?;
-        // rate control reads the timestamps, so they are real time
-        let pts = CMTime { value: self.next_pts, timescale: 1_000_000, flags: 1, epoch: 0 };
-        self.next_pts += (1e6 / target.fps.max(0.1)).round().max(1.0) as i64;
+        let pts = CMTime { value: self.next_pts, timescale: 1_000_000, flags: CMTIME_FLAGS_VALID, epoch: 0 };
+        self.next_pts += (1e6 / target.fps.max(MIN_FPS)).round().max(1.0) as i64;
         let (data, keyframe) = session.encode(i420.data(), pts, target.keyframe || fresh)?;
         Ok(Some(EncodedVideo { data, width: target.width, height: target.height, keyframe }))
     }
