@@ -151,6 +151,11 @@ pub fn estimated_bytes(payload_bytes: usize, options: &EncodeOptions, passthroug
     }
 }
 
+/// [`estimated_bytes`] for raw pixels (raw images' codecs): a JPEG of them is a tenth of them or less.
+pub(crate) fn raw_estimated_bytes(payload_bytes: usize, options: &EncodeOptions) -> f64 {
+    estimated_bytes(payload_bytes, options, false) * 0.1
+}
+
 /// A compressed image (any [`FileFormat`]) as RGB8.
 pub fn to_rgb(data: &[u8], hint: &str) -> Result<Rgb8> {
     match sniff_format(data, hint)? {

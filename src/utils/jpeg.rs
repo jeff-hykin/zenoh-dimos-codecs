@@ -3,21 +3,26 @@
 use crate::utils::raw_pixels::{Rgb8, samples_to_rgb};
 use anyhow::{Context, Result, ensure};
 use zenoh_gateway::VideoImage;
+use zune_jpeg::zune_core::bytestream::ZCursor;
+use zune_jpeg::zune_core::colorspace::ColorSpace;
+use zune_jpeg::zune_core::options::DecoderOptions;
+
+/// JPEG quality at the allocator's quality 0.
+const LOWEST_JPEG_QUALITY: f64 = 20.0;
+/// JPEG quality at quality 1: past ~95 "the compressed file size goes up dramatically for hardly any gain" (libjpeg's usage.txt).
+const HIGHEST_JPEG_QUALITY: f64 = 95.0;
 
 /// RGB8 as a JPEG at `quality` (0..1 → JPEG quality 20..95).
 pub fn encode(image: &Rgb8, quality: f64) -> Result<Vec<u8>> {
     let (width, height) = (u16::try_from(image.width).context("jpeg: wider than 65535")?, u16::try_from(image.height).context("jpeg: taller than 65535")?);
     let mut out = Vec::new();
-    let jpeg_quality = (20.0 + 75.0 * quality.clamp(0.0, 1.0)).round() as u8;
+    let jpeg_quality = (LOWEST_JPEG_QUALITY + (HIGHEST_JPEG_QUALITY - LOWEST_JPEG_QUALITY) * quality.clamp(0.0, 1.0)).round() as u8;
     jpeg_encoder::Encoder::new(&mut out, jpeg_quality).encode(&image.pixels, width, height, jpeg_encoder::ColorType::Rgb).map_err(|e| anyhow::anyhow!("jpeg: {e}"))?;
     Ok(out)
 }
 
 /// A JPEG as RGB8.
 pub fn to_rgb(data: &[u8]) -> Result<Rgb8> {
-    use zune_jpeg::zune_core::bytestream::ZCursor;
-    use zune_jpeg::zune_core::colorspace::ColorSpace;
-    use zune_jpeg::zune_core::options::DecoderOptions;
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     let pixels = decoder.decode().map_err(|e| anyhow::anyhow!("jpeg: {e:?}"))?;
@@ -29,9 +34,6 @@ pub fn to_rgb(data: &[u8]) -> Result<Rgb8> {
 /// what zenoh-gateway's RGB conversion produces), chroma from each 2x2 block's mean.
 /// `None` for a JPEG that isn't YCbCr or has an odd side.
 pub fn to_i420(data: &[u8]) -> Result<Option<VideoImage>> {
-    use zune_jpeg::zune_core::bytestream::ZCursor;
-    use zune_jpeg::zune_core::colorspace::ColorSpace;
-    use zune_jpeg::zune_core::options::DecoderOptions;
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::YCbCr);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     decoder.decode_headers().map_err(|e| anyhow::anyhow!("jpeg: {e:?}"))?;

@@ -15,7 +15,7 @@ pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     let height = cdr.u32()?;
     let width = cdr.u32()?;
     let field_count = cdr.u32()? as usize;
-    ensure!(field_count <= 1024, "PointCloud2 with {field_count} fields");
+    ensure!(field_count <= super::MAX_POINT_FIELDS, "PointCloud2 with {field_count} fields");
     let mut fields = Vec::with_capacity(field_count);
     for _ in 0..field_count {
         let name = cdr.string()?;

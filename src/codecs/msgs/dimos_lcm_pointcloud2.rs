@@ -15,7 +15,7 @@ pub struct DimosLcmPointCloud2;
 pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
     let mut lcm = Lcm::new(payload, LCM_POINT_CLOUD2, "sensor_msgs.PointCloud2")?;
     let field_count = lcm.length()?;
-    ensure!(field_count <= 1024, "PointCloud2 with {field_count} fields");
+    ensure!(field_count <= super::MAX_POINT_FIELDS, "PointCloud2 with {field_count} fields");
     let data_length = lcm.length()?;
     let header = lcm.header()?;
     let height = lcm.i32()? as u32;

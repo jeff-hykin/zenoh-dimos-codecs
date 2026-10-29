@@ -33,13 +33,15 @@ pub fn read_u16(bytes: &[u8], big_endian: bool) -> u16 {
 /// Writes one pixel's RGB from its source bytes (and the message's big-endian flag).
 type PixelConverter = fn(&[u8], bool, &mut [u8]);
 
+/// Image `encoding`s that are a file in the data field (dimos' jpeg-encoded Image), not raw pixels.
+const FILE_ENCODINGS: [&str; 5] = ["jpeg", "jpg", "png", "webp", "jxl"];
+
 /// A raw image (or a dimos Image carrying a jpeg/png file) as RGB8. 16-bit gray keeps its top 8 bits.
 pub fn to_rgb(image: &RawImage) -> Result<Rgb8> {
     let encoding = image.encoding.to_ascii_lowercase();
-    if matches!(encoding.as_str(), "jpeg" | "jpg" | "png" | "webp" | "jxl") {
+    if FILE_ENCODINGS.contains(&encoding.as_str()) {
         return compressed_image::to_rgb(image.data, &encoding);
     }
-    // (bytes per pixel, writes one pixel's RGB from its source bytes)
     let (bytes_per_pixel, convert): (usize, PixelConverter) = match encoding.as_str() {
         "rgb8" => (3, |s, _, d| d.copy_from_slice(&s[..3])),
         "bgr8" | "8uc3" => (3, |s, _, d| d.copy_from_slice(&[s[2], s[1], s[0]])),
@@ -47,7 +49,7 @@ pub fn to_rgb(image: &RawImage) -> Result<Rgb8> {
         "bgra8" | "8uc4" => (4, |s, _, d| d.copy_from_slice(&[s[2], s[1], s[0]])),
         "mono8" | "8uc1" => (1, |s, _, d| d.fill(s[0])),
         "mono16" | "16uc1" => (2, |s, big, d| d.fill((read_u16(s, big) >> 8) as u8)),
-        other => bail!("image encoding {other:?} has no color conversion (supported: rgb8 bgr8 rgba8 bgra8 mono8 mono16 16UC1 jpeg png)"),
+        other => bail!("image encoding {other:?} has no color conversion (supported: rgb8 bgr8 rgba8 bgra8 mono8 mono16 16UC1 jpeg png webp jxl)"),
     };
     ensure!(image.width > 0 && image.height > 0, "empty image");
     let mut pixels = vec![0u8; image.width as usize * image.height as usize * 3];
@@ -77,7 +79,7 @@ pub fn samples_to_rgb(samples: &[u8], channels: usize, width: u32, height: u32) 
 /// (see [`compressed_image::to_video`]).
 pub fn to_video(image: &RawImage) -> Result<VideoImage> {
     let encoding = image.encoding.to_ascii_lowercase();
-    if matches!(encoding.as_str(), "jpeg" | "jpg" | "png" | "webp" | "jxl") {
+    if FILE_ENCODINGS.contains(&encoding.as_str()) {
         return compressed_image::to_video(image.data, &encoding);
     }
     to_rgb(image)?.into_video()

@@ -27,6 +27,10 @@ pub use ros2_image::Ros2Image;
 pub use ros2_pointcloud2::Ros2PointCloud2;
 pub use ros2_raw_audio::Ros2RawAudio;
 
+/// The most PointCloud2 fields a parser takes, a bound on a length read off the wire before allocating (real clouds
+/// have a handful: x, y, z, intensity, ring, time, ...).
+pub(crate) const MAX_POINT_FIELDS: usize = 1024;
+
 // The message shapes both protocols share.
 
 /// `sensor_msgs/Image`

@@ -57,8 +57,7 @@ impl MessageEncoding for Ros2Image {
     }
 
     fn estimated_bytes(&self, payload_bytes: usize, options: &EncodeOptions) -> f64 {
-        // a JPEG of raw pixels is a tenth of them or less
-        compressed_image::estimated_bytes(payload_bytes, options, false) * 0.1
+        compressed_image::raw_estimated_bytes(payload_bytes, options)
     }
 }
 

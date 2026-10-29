@@ -4,8 +4,10 @@
 use anyhow::{Result, ensure};
 use zenoh_gateway::AudioPcm;
 
-/// The rates Opus takes; others are resampled to 48 kHz.
+/// The rates Opus takes (RFC 6716); others are resampled to `RESAMPLED_RATE`.
 const OPUS_RATES: [u32; 5] = [8_000, 12_000, 16_000, 24_000, 48_000];
+/// Opus's full-band rate, the one it codes at internally.
+const RESAMPLED_RATE: u32 = 48_000;
 
 /// An interleaved little-endian `pcm-s16` block as Opus-ready PCM: channels past the second are dropped, and a rate
 /// Opus doesn't take is resampled to 48 kHz (linear, per block, so a block boundary can carry a tiny step).
@@ -20,10 +22,10 @@ pub fn s16_to_pcm(data: &[u8], format: &str, sample_rate: u32, channels: u32) ->
     if OPUS_RATES.contains(&sample_rate) {
         return AudioPcm::new(sample_rate, kept as u8, frames.concat());
     }
-    let out_frames = (frames.len() as u64 * 48_000 / sample_rate as u64) as usize;
+    let out_frames = (frames.len() as u64 * RESAMPLED_RATE as u64 / sample_rate as u64) as usize;
     let mut out = Vec::with_capacity(out_frames * kept);
     for index in 0..out_frames {
-        let position = index as f64 * sample_rate as f64 / 48_000.0;
+        let position = index as f64 * sample_rate as f64 / RESAMPLED_RATE as f64;
         let (before, fraction) = (position.floor() as usize, position.fract());
         let after = (before + 1).min(frames.len() - 1);
         for channel in 0..kept {
@@ -31,7 +33,7 @@ pub fn s16_to_pcm(data: &[u8], format: &str, sample_rate: u32, channels: u32) ->
             out.push((a + (b - a) * fraction).round() as i16);
         }
     }
-    AudioPcm::new(48_000, kept as u8, out)
+    AudioPcm::new(RESAMPLED_RATE, kept as u8, out)
 }
 
 #[cfg(test)]
