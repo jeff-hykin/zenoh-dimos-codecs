@@ -16,7 +16,7 @@ pub fn s16_to_pcm(data: &[u8], format: &str, sample_rate: u32, channels: u32) ->
     ensure!(channels > 0 && sample_rate > 0, "audio block with {channels} channels at {sample_rate} Hz");
     let samples: Vec<i16> = data.as_chunks::<2>().0.iter().map(|&bytes| i16::from_le_bytes(bytes)).collect();
     let channels = channels as usize;
-    ensure!(samples.len() % channels == 0, "{} samples are not whole {channels}-channel frames", samples.len());
+    ensure!(samples.len().is_multiple_of(channels), "{} samples are not whole {channels}-channel frames", samples.len());
     let kept = channels.min(2);
     let frames: Vec<&[i16]> = samples.chunks_exact(channels).map(|frame| &frame[..kept]).collect();
     if OPUS_RATES.contains(&sample_rate) {
@@ -28,8 +28,8 @@ pub fn s16_to_pcm(data: &[u8], format: &str, sample_rate: u32, channels: u32) ->
         let position = index as f64 * sample_rate as f64 / RESAMPLED_RATE as f64;
         let (before, fraction) = (position.floor() as usize, position.fract());
         let after = (before + 1).min(frames.len() - 1);
-        for channel in 0..kept {
-            let (a, b) = (frames[before][channel] as f64, frames[after][channel] as f64);
+        for (&a, &b) in frames[before].iter().zip(frames[after]) {
+            let (a, b) = (a as f64, b as f64);
             out.push((a + (b - a) * fraction).round() as i16);
         }
     }
