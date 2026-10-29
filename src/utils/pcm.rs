@@ -49,6 +49,9 @@ mod tests {
         let pcm = s16_to_pcm(&s16(&[1, 2, 3, 4, 5, 6]), "pcm-s16", 48_000, 3).unwrap();
         assert_eq!((pcm.sample_rate(), pcm.channels(), pcm.samples()), (48_000, 2, &[1, 2, 4, 5][..]));
         assert!(s16_to_pcm(&s16(&[1, 2]), "pcm-f32", 48_000, 1).is_err());
+        assert!(s16_to_pcm(&s16(&[1, 2, 3]), "pcm-s16", 48_000, 2).is_err(), "half a frame");
+        assert!(s16_to_pcm(&s16(&[1, 2]), "pcm-s16", 48_000, 0).is_err(), "no channels");
+        assert!(s16_to_pcm(&s16(&[1, 2]), "pcm-s16", 0, 1).is_err(), "no rate");
     }
 
     #[test]

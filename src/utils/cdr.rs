@@ -57,3 +57,19 @@ impl<'a> Cdr<'a> {
         Ok(crate::codecs::msgs::Header::new(sec, nsec, self.string()?, None))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endianness_alignment_and_bad_input() {
+        // big endian, a u8 then a u32 aligned to 4
+        let mut cdr = Cdr::new(&[0, 0, 0, 0, 7, 0xff, 0xff, 0xff, 0, 0, 1, 2]).unwrap();
+        assert_eq!((cdr.u8().unwrap(), cdr.u32().unwrap()), (7, 0x0102));
+        assert!(cdr.u8().is_err(), "past the end");
+        assert!(Cdr::new(&[0, 0x42, 0, 0]).is_err(), "an unknown representation");
+        assert!(Cdr::new(&[0, 1]).is_err(), "shorter than the encapsulation header");
+        assert!(Cdr::new(&[0, 1, 0, 0, 0xff, 0xff, 0xff, 0x7f]).unwrap().byte_sequence().is_err(), "a length past the payload");
+    }
+}

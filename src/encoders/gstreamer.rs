@@ -473,6 +473,13 @@ mod tests {
     }
 
     #[test]
+    fn idr_slices_are_keyframes() {
+        assert!(has_idr(&[0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65, 0x88]), "SPS then an IDR slice");
+        assert!(!has_idr(&[0, 0, 0, 1, 0x41, 0x9a]), "a non-IDR slice");
+        assert!(!has_idr(&[]));
+    }
+
+    #[test]
     fn rows_padded_to_gstreamer_strides() {
         let packed: Vec<u8> = (0..6 * 2 * 3 / 2).map(|index| index as u8 + 1).collect();
         // 6 wide: luma rows to 8 bytes, chroma rows (3) to 4

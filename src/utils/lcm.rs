@@ -50,3 +50,23 @@ impl<'a> Lcm<'a> {
         Ok(crate::codecs::msgs::Header::new(sec, nsec as u32, self.string()?, Some(seq)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_lengths_and_bad_input() {
+        let fingerprint = [1, 2, 3, 4, 5, 6, 7, 8];
+        let mut payload = fingerprint.to_vec();
+        payload.extend(3i32.to_be_bytes());
+        payload.extend(b"ab\0");
+        assert_eq!(Lcm::new(&payload, fingerprint, "t").unwrap().string().unwrap(), "ab");
+        assert!(Lcm::new(&payload, [0; 8], "t").is_err(), "another type's fingerprint");
+        assert!(Lcm::new(&payload[..5], fingerprint, "t").is_err(), "shorter than the fingerprint");
+        let mut negative = fingerprint.to_vec();
+        negative.extend((-1i32).to_be_bytes());
+        assert!(Lcm::new(&negative, fingerprint, "t").unwrap().length().is_err(), "a negative length");
+        assert!(Lcm::new(&payload[..12], fingerprint, "t").unwrap().string().is_err(), "a string past the payload");
+    }
+}

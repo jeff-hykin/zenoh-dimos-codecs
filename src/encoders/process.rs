@@ -379,3 +379,35 @@ fn read_array<const N: usize>(input: &mut impl Read) -> Result<[u8; N]> {
 fn read_u32(input: &mut impl Read) -> Result<u32> {
     Ok(u32::from_le_bytes(read_array(input)?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requests_and_replies_round_trip_and_reject_garbage() {
+        let image = VideoImage::i420(4, 2, (0..12).collect()).unwrap();
+        let mut target = VideoTarget::new(4, 2, 300_000, 15.0);
+        (target.quality, target.keyframe) = (0.25, true);
+        let request = encode_request(&DecodedFrame::Video(image), &target).unwrap();
+        assert_eq!(request.len(), REQUEST_HEADER_BYTES + 12);
+        let (DecodedFrame::Video(decoded), decoded_target) = read_request(&mut request.as_slice()).unwrap().unwrap() else { panic!("a picture") };
+        assert_eq!((decoded.width(), decoded.height(), decoded.format(), decoded.data()), (4, 2, PixelFormat::I420, &(0..12).collect::<Vec<u8>>()[..]));
+        assert_eq!((decoded_target.quality, decoded_target.bitrate_bps, decoded_target.fps, decoded_target.keyframe), (0.25, 300_000, 15.0, true));
+        assert!(read_request(&mut &[][..]).unwrap().is_none(), "a closed pipe is the end, not an error");
+        assert!(read_request(&mut &request[..request.len() - 1]).is_err(), "a truncated picture");
+        let mut unknown_format = request.clone();
+        unknown_format[29] = 9;
+        assert!(read_request(&mut unknown_format.as_slice()).is_err(), "an unknown pixel format");
+
+        let frame = EncodedVideo { data: vec![0, 0, 0, 1, 0x65], width: 4, height: 2, keyframe: true };
+        for reply in [Ok(None), Ok(Some(frame)), Err("the device went away".to_owned())] {
+            let mut bytes = Vec::new();
+            write_reply(&mut bytes, &reply).unwrap();
+            let read = read_reply(&mut bytes.as_slice()).unwrap();
+            assert_eq!(read, reply);
+        }
+        assert!(read_reply(&mut &[7u8][..]).is_err(), "an unknown reply tag");
+        assert!(read_reply(&mut &[1u8, 4, 0][..]).is_err(), "a truncated frame");
+    }
+}

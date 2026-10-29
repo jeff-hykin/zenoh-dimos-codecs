@@ -165,5 +165,8 @@ mod tests {
         let DepthValues::U16(values) = from_compressed(&message.header, message.data, &message.format).unwrap().values else { panic!() };
         assert!(values.iter().enumerate().all(|(i, &v)| v as usize == 1000 + i % 320 + 4 * (i / 320)), "jxl depth is lossless");
         assert!(from_raw(&ros2_image::parse(&fixture("ros2/image_rgb8.cdr")).unwrap()).is_err());
+        assert!(from_compressed(&message.header, message.data, "32FC1; compressedDepth png").is_err(), "quantized inverse depth is refused");
+        assert!(from_compressed(&message.header, &message.data[..8], "16UC1; compressedDepth png").is_err(), "shorter than its 12-byte header");
+        assert!(from_compressed(&message.header, &fixture("compressed/pattern.png"), "png").is_err(), "an 8-bit color png is not depth");
     }
 }
