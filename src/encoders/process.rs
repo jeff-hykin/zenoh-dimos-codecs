@@ -40,7 +40,11 @@ impl ProcessConfig {
     /// The host program again, with the arguments it was started with.
     pub fn current_exe() -> Arc<dyn Fn() -> Command + Send + Sync> {
         Arc::new(|| {
-            let mut command = Command::new(std::env::current_exe().unwrap_or_else(|_| std::env::args().next().unwrap_or_default().into()));
+            let program = std::env::current_exe().unwrap_or_else(|error| {
+                log::warn!("video encoder process: no current_exe ({error}): starting argv[0]");
+                std::env::args().next().unwrap_or_default().into()
+            });
+            let mut command = Command::new(program);
             command.args(std::env::args_os().skip(1));
             command
         })
@@ -79,12 +83,8 @@ fn serve(factory: &(dyn Fn() -> Box<dyn VideoEncoder> + Send + Sync)) -> Result<
     output.write_all(READY)?;
     output.flush()?;
     loop {
-        let (frame, target) = match read_request(&mut input) {
-            Ok(Some(request)) => request,
-            // the parent closed the pipe: it is done with this encoder
-            Ok(None) => return Ok(()),
-            Err(error) => return Err(error),
-        };
+        // the parent closed the pipe: it is done with this encoder
+        let Some((frame, target)) = read_request(&mut input)? else { return Ok(()) };
         match encoder.encode(&frame, &target) {
             Ok(encoded) => write_reply(&mut output, &Ok(encoded))?,
             Err(error) => {
@@ -125,52 +125,61 @@ impl ProcessEncoder {
     /// Encodes `format` in children run as `config` says; the first is started now, so it is ready by the first frames.
     pub fn new(config: ProcessConfig, format: VideoFormat) -> Self {
         let mut encoder = ProcessEncoder { config, format, child: None, starts: 0 };
-        encoder.start();
+        if let Err(error) = encoder.start() {
+            log::warn!("{error:#}");
+        }
         encoder
     }
 
-    fn start(&mut self) {
+    fn start(&mut self) -> Result<()> {
         self.starts += 1;
         let mut command = (self.config.command)();
         command.env(CHILD_ENV, "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
-        match command.spawn() {
-            Ok(mut child) => {
-                let (stdin, stdout) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"));
-                let (requests, request_rx) = mpsc::channel();
-                let (reply_tx, replies) = mpsc::channel();
-                std::thread::Builder::new()
-                    .name("video encoder process".into())
-                    .spawn(move || talk(stdin, stdout, request_rx, reply_tx))
-                    .expect("a thread");
-                self.child = Some(Running { child, requests, replies, started: Instant::now(), ready: false });
-            }
-            Err(error) => log::warn!("video encoder process would not start: {error}"),
-        }
+        let mut child = command.spawn().context("the video encoder process would not start")?;
+        let (stdin, stdout) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"));
+        let (requests, request_rx) = mpsc::channel();
+        let (reply_tx, replies) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("video encoder process".into())
+            .spawn(move || talk(stdin, stdout, request_rx, reply_tx))
+            .expect("a thread");
+        self.child = Some(Running { child, requests, replies, started: Instant::now(), ready: false });
+        Ok(())
     }
 
     /// Kills the child (a hung one included: the OS takes back what it held) and starts another.
     fn restart(&mut self, why: &str) {
         log::warn!("video encoder process {why}: restarting it");
-        if let Some(mut running) = self.child.take() {
-            let _ = running.child.kill();
-            // reaped off this thread: a child stuck in the device can take a while to go
-            std::thread::spawn(move || {
-                let _ = running.child.wait();
-            });
+        if let Some(running) = self.child.take() {
+            running.stop();
         }
-        self.start();
+        if let Err(error) = self.start() {
+            log::warn!("{error:#}");
+        }
+    }
+}
+
+impl Running {
+    /// Closes the child's stdin (which ends a healthy child), kills it (a stuck one) and reaps it off this thread.
+    fn stop(self) {
+        let Running { mut child, requests, .. } = self;
+        drop(requests);
+        if let Err(error) = child.kill() {
+            log::warn!("video encoder process {}: kill failed: {error}", child.id());
+        }
+        // a child stuck in the device can take a while to go
+        std::thread::spawn(move || {
+            if let Err(error) = child.wait() {
+                log::warn!("video encoder process {}: wait failed: {error}", child.id());
+            }
+        });
     }
 }
 
 impl Drop for ProcessEncoder {
     fn drop(&mut self) {
-        if let Some(mut running) = self.child.take() {
-            // closing its stdin ends a healthy child; kill covers a stuck one
-            drop(running.requests);
-            let _ = running.child.kill();
-            std::thread::spawn(move || {
-                let _ = running.child.wait();
-            });
+        if let Some(running) = self.child.take() {
+            running.stop();
         }
     }
 }
@@ -182,9 +191,9 @@ impl VideoEncoder for ProcessEncoder {
 
     fn encode(&mut self, frame: &DecodedFrame, target: &VideoTarget) -> Result<Option<EncodedVideo>> {
         if self.child.is_none() {
-            self.start();
+            self.start()?;
         }
-        let Some(running) = self.child.as_mut() else { bail!("the video encoder process would not start") };
+        let running = self.child.as_mut().expect("started above");
         if !running.ready {
             match running.replies.try_recv() {
                 Ok(Ok(Reply::Ready)) => running.ready = true,

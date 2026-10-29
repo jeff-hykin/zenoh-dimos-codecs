@@ -256,9 +256,9 @@ impl Session {
             let pool = VTCompressionSessionGetPixelBufferPool(self.raw);
             ensure!(!pool.is_null(), "VideoToolbox: no pixel buffer pool");
             let mut buffer = null();
-            ensure!(CVPixelBufferPoolCreatePixelBuffer(null(), pool, &mut buffer) == 0, "VideoToolbox: no pixel buffer");
+            check(CVPixelBufferPoolCreatePixelBuffer(null(), pool, &mut buffer), "pixel buffer")?;
             let buffer = Owned(buffer);
-            ensure!(CVPixelBufferLockBaseAddress(buffer.0, 0) == 0, "VideoToolbox: lock failed");
+            check(CVPixelBufferLockBaseAddress(buffer.0, 0), "lock")?;
             let (y_plane, y_stride) = (CVPixelBufferGetBaseAddressOfPlane(buffer.0, 0), CVPixelBufferGetBytesPerRowOfPlane(buffer.0, 0));
             let (uv_plane, uv_stride) = (CVPixelBufferGetBaseAddressOfPlane(buffer.0, 1), CVPixelBufferGetBytesPerRowOfPlane(buffer.0, 1));
             for (row, source) in luma.chunks_exact(width).enumerate() {
@@ -270,7 +270,7 @@ impl Session {
                     (pair[0], pair[1]) = (*u, *v);
                 }
             }
-            CVPixelBufferUnlockBaseAddress(buffer.0, 0);
+            check(CVPixelBufferUnlockBaseAddress(buffer.0, 0), "unlock")?;
             let force = keyframe.then(|| dictionary(&[(kVTEncodeFrameOptionKey_ForceKeyFrame, kCFBooleanTrue)]));
             *self.slot.lock().unwrap() = None;
             check(VTCompressionSessionEncodeFrame(self.raw, buffer.0, pts, kCMTimeInvalid, force.as_ref().map_or(null(), |force| force.0), null_mut(), null_mut()), "encode")?;

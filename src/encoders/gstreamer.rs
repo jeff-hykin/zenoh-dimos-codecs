@@ -308,12 +308,18 @@ impl Pipeline {
         unsafe {
             if keyframe {
                 let event = (self.api.force_key_unit)(CLOCK_TIME_NONE, CLOCK_TIME_NONE, CLOCK_TIME_NONE, 1, 0);
-                (self.api.element_send_event)(self.source, event);
+                if (self.api.element_send_event)(self.source, event) == 0 {
+                    log::warn!("GStreamer {}: the keyframe request was not handled", self.element.name);
+                }
             }
             let i420 = gstreamer_layout(i420, self.size);
             let buffer = (self.api.buffer_new_allocate)(null_mut(), i420.len(), null_mut());
             ensure!(!buffer.is_null(), "GStreamer: no buffer");
-            (self.api.buffer_fill)(buffer, 0, i420.as_ptr().cast(), i420.len());
+            let filled = (self.api.buffer_fill)(buffer, 0, i420.as_ptr().cast(), i420.len());
+            if filled != i420.len() {
+                (self.api.mini_object_unref)(buffer);
+                bail!("GStreamer: filled {filled} of {} bytes", i420.len());
+            }
             let flow = (self.api.app_src_push_buffer)(self.source, buffer);
             ensure!(flow == 0, "GStreamer push: flow {flow}");
             self.pushed += 1;
@@ -326,8 +332,9 @@ impl Pipeline {
             self.pulled += 1;
             let out = (self.api.sample_get_buffer)(sample);
             let mut data = vec![0u8; (self.api.buffer_get_size)(out)];
-            (self.api.buffer_extract)(out, 0, data.as_mut_ptr().cast(), data.len());
+            let extracted = (self.api.buffer_extract)(out, 0, data.as_mut_ptr().cast(), data.len());
             (self.api.mini_object_unref)(sample);
+            ensure!(extracted == data.len(), "GStreamer: extracted {extracted} of {} bytes", data.len());
             Ok(Some(data))
         }
     }
