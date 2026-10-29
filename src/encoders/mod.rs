@@ -1,10 +1,10 @@
-//! Hardware video encoders for [zenoh-gateway](https://github.com/jeff-hykin/zenoh-gateway), as [`VideoEncoder`]s for
+//! Hardware video encoders for [zenoh-gateway](https://github.com/jeff-hykin/zenoh-gateway), as [`VideoEncoder`](zenoh_gateway::VideoEncoder)s for
 //! [`ServerBuilder::video_encoder`](zenoh_gateway::ServerBuilder::video_encoder):
 //! - `videotoolbox` (feature): macOS VideoToolbox, the Mac's media engine;
 //! - `gstreamer` (feature): a GStreamer hardware encoder found at runtime, `nvv4l2h264enc` (Jetson), `nvh264enc`
 //!   (NVENC) or `vah264enc` / `vaapih264enc` (VAAPI).
 //!
-//! [`select`] probes them (each must encode a test frame) and wraps the one it picks in a [`Fallback`] to software
+//! [`select`](crate::encoders::select) probes them (each must encode a test frame) and wraps the one it picks in a [`Fallback`](crate::encoders::Fallback) to software
 //! H.264, so a hardware encoder that fails mid-stream hands over to openh264 from a keyframe.
 //!
 //! ```no_run
