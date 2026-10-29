@@ -85,15 +85,12 @@ fn serve(factory: &(dyn Fn() -> Box<dyn VideoEncoder> + Send + Sync)) -> Result<
     loop {
         // the parent closed the pipe: it is done with this encoder
         let Some((frame, target)) = read_request(&mut input)? else { return Ok(()) };
-        match encoder.encode(&frame, &target) {
-            Ok(encoded) => write_reply(&mut output, &Ok(encoded))?,
-            Err(error) => {
-                write_reply(&mut output, &Err(format!("{error:#}")))?;
-                output.flush()?;
-                bail!("encoder failed: {error:#}");
-            }
-        }
+        let reply = encoder.encode(&frame, &target).map_err(|error| format!("{error:#}"));
+        write_reply(&mut output, &reply)?;
         output.flush()?;
+        if let Err(error) = reply {
+            bail!("encoder failed: {error}");
+        }
     }
 }
 
@@ -147,6 +144,28 @@ impl ProcessEncoder {
         Ok(())
     }
 
+    /// Whether the child has said it is ready, without waiting: one that failed, exited or took too long to start is
+    /// restarted.
+    fn ready(&mut self) -> bool {
+        let running = self.child.as_mut().expect("started");
+        if running.ready {
+            return true;
+        }
+        let why = match running.replies.try_recv() {
+            Ok(Ok(Reply::Ready)) => {
+                running.ready = true;
+                return true;
+            }
+            Ok(Err(error)) => format!("failed to start ({error})"),
+            Ok(Ok(Reply::Encoded(_))) => "failed to start (answered before it was ready)".into(),
+            Err(mpsc::TryRecvError::Empty) if running.started.elapsed() < self.config.startup_timeout => return false,
+            Err(mpsc::TryRecvError::Empty) => format!("did not start within {:?}", self.config.startup_timeout),
+            Err(mpsc::TryRecvError::Disconnected) => "exited while starting".into(),
+        };
+        self.restart(&why);
+        false
+    }
+
     /// Kills the child (a hung one included: the OS takes back what it held) and starts another.
     fn restart(&mut self, why: &str) {
         log::warn!("video encoder process {why}: restarting it");
@@ -193,28 +212,8 @@ impl VideoEncoder for ProcessEncoder {
         if self.child.is_none() {
             self.start()?;
         }
-        let running = self.child.as_mut().expect("started above");
-        if !running.ready {
-            match running.replies.try_recv() {
-                Ok(Ok(Reply::Ready)) => running.ready = true,
-                Ok(other) => {
-                    let why = match other {
-                        Err(error) => error,
-                        _ => "answered before it was ready".into(),
-                    };
-                    self.restart(&format!("failed to start ({why})"));
-                    return Ok(None);
-                }
-                Err(mpsc::TryRecvError::Empty) if running.started.elapsed() < self.config.startup_timeout => return Ok(None),
-                Err(mpsc::TryRecvError::Empty) => {
-                    self.restart(&format!("did not start within {:?}", self.config.startup_timeout));
-                    return Ok(None);
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.restart("exited while starting");
-                    return Ok(None);
-                }
-            }
+        if !self.ready() {
+            return Ok(None);
         }
         // a fresh child's first frame is a keyframe, which the viewers need after a restart
         let request = encode_request(frame, target)?;
@@ -280,11 +279,14 @@ fn talk(stdin: ChildStdin, stdout: ChildStdout, requests: mpsc::Receiver<Vec<u8>
     }
 }
 
+/// A request's bytes before the picture's: the layout [`encode_request`] documents.
+const REQUEST_HEADER_BYTES: usize = 8 + 4 + 4 + 4 + 8 + 1 + 1 + 4 + 4 + 4;
+
 /// `target` (quality f64, width u32, height u32, bitrate u32, fps f64, keyframe u8), then the picture (pixel format
 /// u8, width u32, height u32, length u32, bytes), little endian.
 fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>> {
     let DecodedFrame::Video(image) = frame else { bail!("a video encoder process encodes pictures, got {frame:?}") };
-    let mut bytes = Vec::with_capacity(48 + image.data().len());
+    let mut bytes = Vec::with_capacity(REQUEST_HEADER_BYTES + image.data().len());
     bytes.extend_from_slice(&target.quality.to_le_bytes());
     bytes.extend_from_slice(&target.width.to_le_bytes());
     bytes.extend_from_slice(&target.height.to_le_bytes());
