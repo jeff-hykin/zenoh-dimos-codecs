@@ -286,6 +286,15 @@ const REQUEST_HEADER_BYTES: usize = 8 + 4 + 4 + 4 + 8 + 1 + 1 + 4 + 4 + 4;
 /// u8, width u32, height u32, length u32, bytes), little endian.
 fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>> {
     let DecodedFrame::Video(image) = frame else { bail!("a video encoder process encodes pictures, got {frame:?}") };
+    // scaled here, the pipe carries the picture at the size it is encoded at: the R1's full-size 1920x1536 RGB (8.8 MB)
+    // piped every frame cost the same at any size, so the gateway's CPU governor shrank it to the floor for nothing
+    let scaled;
+    let image = if (image.width(), image.height()) == (target.width, target.height) {
+        image
+    } else {
+        scaled = image.to_i420(target.width, target.height)?;
+        &scaled
+    };
     let mut bytes = Vec::with_capacity(REQUEST_HEADER_BYTES + image.data().len());
     bytes.extend_from_slice(&target.quality.to_le_bytes());
     bytes.extend_from_slice(&target.width.to_le_bytes());
@@ -395,6 +404,10 @@ mod tests {
         assert_eq!((decoded.width(), decoded.height(), decoded.format(), decoded.data()), (4, 2, PixelFormat::I420, &(0..12).collect::<Vec<u8>>()[..]));
         assert_eq!((decoded_target.quality, decoded_target.bitrate_bps, decoded_target.fps, decoded_target.keyframe), (0.25, 300_000, 15.0, true));
         assert!(read_request(&mut &[][..]).unwrap().is_none(), "a closed pipe is the end, not an error");
+        // a picture bigger than the target goes over at the target's size
+        let big = VideoImage::rgb8(8, 4, vec![200; 8 * 4 * 3]).unwrap();
+        let (DecodedFrame::Video(sent), _) = read_request(&mut encode_request(&DecodedFrame::Video(big), &target).unwrap().as_slice()).unwrap().unwrap() else { panic!("a picture") };
+        assert_eq!((sent.width(), sent.height(), sent.format()), (4, 2, PixelFormat::I420));
         assert!(read_request(&mut &request[..request.len() - 1]).is_err(), "a truncated picture");
         let mut unknown_format = request.clone();
         unknown_format[29] = 9;
