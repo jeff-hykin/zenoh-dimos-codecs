@@ -40,7 +40,7 @@ fn cdr_compressed_image(format: &str, data: &[u8]) -> Vec<u8> {
     let mut out = vec![0, 1, 0, 0];
     let mut body = Vec::new();
     let string = |body: &mut Vec<u8>, text: &str| {
-        while body.len() % 4 != 0 {
+        while !body.len().is_multiple_of(4) {
             body.push(0);
         }
         body.extend(((text.len() + 1) as u32).to_le_bytes());
@@ -51,7 +51,7 @@ fn cdr_compressed_image(format: &str, data: &[u8]) -> Vec<u8> {
     body.extend(2u32.to_le_bytes());
     string(&mut body, "camera");
     string(&mut body, format);
-    while body.len() % 4 != 0 {
+    while !body.len().is_multiple_of(4) {
         body.push(0);
     }
     body.extend((data.len() as u32).to_le_bytes());
@@ -122,6 +122,7 @@ fn main() -> Result<()> {
     });
     let parse = median_ms(rounds, || drop(std::hint::black_box(ros2_compressed_image::parse(&payload).unwrap())));
     let to_video = median_ms(rounds, || drop(std::hint::black_box(compressed_image::to_video(&jpeg, "jpeg").unwrap())));
+    let zune_to_video = median_ms(rounds, || drop(std::hint::black_box(zenoh_dimos_codecs::utils::jpeg::zune_to_i420(&jpeg).unwrap())));
     let to_rgb = median_ms(rounds, || drop(std::hint::black_box(compressed_image::to_rgb(&jpeg, "jpeg").unwrap())));
     let zune = |colorspace| {
         use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
@@ -140,6 +141,7 @@ fn main() -> Result<()> {
     println!("sample hash (decode sharing)  {hash:7.2} ms");
     println!("cdr parse                     {parse:7.2} ms");
     println!("jpeg -> picture (to_video)    {to_video:7.2} ms   (to RGB instead: {to_rgb:.2} ms)");
+    println!("  zune-jpeg's to_video        {zune_to_video:7.2} ms   (the decoder without the turbojpeg feature)");
     println!("  of which zune-jpeg alone    {zune_ycbcr:7.2} ms   (zune-jpeg to RGB: {zune_rgb:.2} ms)");
     println!("  of which YCbCr -> I420      {convert:7.2} ms   (with lookup tables, as 0.3.2: {convert_tables:.2} ms)");
     println!("picture -> I420 same size     {same_size:7.2} ms");
