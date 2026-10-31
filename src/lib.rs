@@ -27,6 +27,9 @@ pub mod codecs;
 /// Hardware H.264 encoders (features `videotoolbox`, `gstreamer`) with a fallback to software, for
 /// [`ServerBuilder::video_encoder`](zenoh_gateway::ServerBuilder::video_encoder).
 pub mod encoders;
+/// JPEG decoding on the Jetson's hardware decoder, in a child process (feature `gstreamer`), for the video path.
+#[cfg(feature = "gstreamer")]
+pub mod hardware_jpeg;
 /// What the codecs share: wire readers (CDR, LCM), image decoders (JPEG, PNG, WebP, JPEG XL, raw pixels), and the
 /// depth and point-cloud encodings.
 pub mod utils;

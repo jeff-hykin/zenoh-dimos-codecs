@@ -187,6 +187,93 @@ fn c_string(text: &str) -> CString {
     CString::new(text).expect("no NUL in GStreamer names")
 }
 
+/// Fails with `pipeline`'s error, if it posted one; drops every other message posted since. Nothing else reads its bus,
+/// and a bus keeps what it is posted until it is popped: a long-lived pipeline's state, latency, QoS and element
+/// messages piled up for as long as the stream ran.
+fn check_bus(api: &Api, pipeline: Pointer, what: &str) -> Result<()> {
+    // SAFETY: the bus and message references are released here
+    unsafe {
+        let bus = (api.element_get_bus)(pipeline);
+        let message = (api.bus_pop_filtered)(bus, MESSAGE_ERROR);
+        loop {
+            let other = (api.bus_pop_filtered)(bus, MESSAGE_ANY_BUT_ERROR);
+            if other.is_null() {
+                break;
+            }
+            (api.mini_object_unref)(other);
+        }
+        (api.object_unref)(bus);
+        if message.is_null() {
+            return Ok(());
+        }
+        let (mut error, mut debug) = (null_mut(), null_mut());
+        (api.message_parse_error)(message, &mut error, &mut debug);
+        let details = if debug.is_null() { String::new() } else { CStr::from_ptr(debug).to_string_lossy().into_owned() };
+        (api.free)(debug.cast());
+        (api.mini_object_unref)(message);
+        bail!("GStreamer {what}: {} ({details})", api.take_error(error))
+    }
+}
+
+/// Builds `description`, finds its `source` and `sink`, and starts it: (pipeline, source, sink), owned references.
+fn launch(api: &Api, description: &str) -> Result<(Pointer, Pointer, Pointer)> {
+    let mut error = null_mut();
+    // SAFETY: plain GStreamer calls; the caller owns every returned reference
+    unsafe {
+        let pipeline = (api.parse_launch)(c_string(description).as_ptr(), &mut error);
+        if pipeline.is_null() || !error.is_null() {
+            let message = api.take_error(error);
+            if !pipeline.is_null() {
+                (api.object_unref)(pipeline);
+            }
+            bail!("GStreamer pipeline {description:?}: {message}");
+        }
+        let by_name = |name: &str| (api.bin_get_by_name)(pipeline, c_string(name).as_ptr());
+        let (source, sink) = (by_name("source"), by_name("sink"));
+        if source.is_null() || sink.is_null() || (api.element_set_state)(pipeline, STATE_PLAYING) == 0 {
+            for object in [source, sink, pipeline].into_iter().filter(|object| !object.is_null()) {
+                (api.object_unref)(object);
+            }
+            bail!("GStreamer pipeline {description:?} would not start");
+        }
+        Ok((pipeline, source, sink))
+    }
+}
+
+/// Pushes `data` into `source` as one buffer.
+fn push(api: &Api, source: Pointer, data: &[u8]) -> Result<()> {
+    // SAFETY: the buffer is handed over to appsrc, or released on failure
+    unsafe {
+        let buffer = (api.buffer_new_allocate)(null_mut(), data.len(), null_mut());
+        ensure!(!buffer.is_null(), "GStreamer: no buffer");
+        let filled = (api.buffer_fill)(buffer, 0, data.as_ptr().cast(), data.len());
+        if filled != data.len() {
+            (api.mini_object_unref)(buffer);
+            bail!("GStreamer: filled {filled} of {} bytes", data.len());
+        }
+        let flow = (api.app_src_push_buffer)(source, buffer);
+        ensure!(flow == 0, "GStreamer push: flow {flow}");
+        Ok(())
+    }
+}
+
+/// The next buffer out of `sink`, waiting at most `timeout`; None if none came.
+fn pull(api: &Api, sink: Pointer, timeout: Duration) -> Result<Option<Vec<u8>>> {
+    // SAFETY: the sample is released once its buffer is copied out
+    unsafe {
+        let sample = (api.app_sink_try_pull_sample)(sink, timeout.as_nanos() as u64);
+        if sample.is_null() {
+            return Ok(None);
+        }
+        let out = (api.sample_get_buffer)(sample);
+        let mut data = vec![0u8; (api.buffer_get_size)(out)];
+        let extracted = (api.buffer_extract)(out, 0, data.as_mut_ptr().cast(), data.len());
+        (api.mini_object_unref)(sample);
+        ensure!(extracted == data.len(), "GStreamer: extracted {extracted} of {} bytes", data.len());
+        Ok(Some(data))
+    }
+}
+
 /// A running `appsrc ! … ! appsink` pipeline (owned references, released on drop).
 struct Pipeline {
     api: &'static Api,
@@ -273,38 +360,14 @@ impl Pipeline {
         self.bitrate_bps = bitrate_bps;
     }
 
-    /// Fails with the pipeline's error, if it posted one; drops every other message posted since. Nothing else reads
-    /// this bus, and a bus keeps what it is posted until it is popped: a long-lived pipeline's state, latency, QoS and
-    /// element messages piled up for as long as the stream ran.
     fn check_bus(&self) -> Result<()> {
-        // SAFETY: the bus and message references are released here
-        unsafe {
-            let bus = (self.api.element_get_bus)(self.pipeline);
-            let message = (self.api.bus_pop_filtered)(bus, MESSAGE_ERROR);
-            loop {
-                let other = (self.api.bus_pop_filtered)(bus, MESSAGE_ANY_BUT_ERROR);
-                if other.is_null() {
-                    break;
-                }
-                (self.api.mini_object_unref)(other);
-            }
-            (self.api.object_unref)(bus);
-            if message.is_null() {
-                return Ok(());
-            }
-            let (mut error, mut debug) = (null_mut(), null_mut());
-            (self.api.message_parse_error)(message, &mut error, &mut debug);
-            let details = if debug.is_null() { String::new() } else { CStr::from_ptr(debug).to_string_lossy().into_owned() };
-            (self.api.free)(debug.cast());
-            (self.api.mini_object_unref)(message);
-            bail!("GStreamer {}: {} ({details})", self.element.name, self.api.take_error(error))
-        }
+        check_bus(self.api, self.pipeline, self.element.name)
     }
 
     /// Pushes one I420 picture and takes the oldest access unit out: at once if one is ready, waiting only once
     /// `MAX_IN_FLIGHT` frames are inside (every access unit comes out, in order, one per call).
     fn encode(&mut self, i420: &[u8], keyframe: bool) -> Result<Option<Vec<u8>>> {
-        // SAFETY: buffers and samples are created, handed over or released as GStreamer documents
+        // SAFETY: the event is handed over to appsrc
         unsafe {
             if keyframe {
                 let event = (self.api.force_key_unit)(CLOCK_TIME_NONE, CLOCK_TIME_NONE, CLOCK_TIME_NONE, 1, 0);
@@ -312,31 +375,14 @@ impl Pipeline {
                     log::warn!("GStreamer {}: the keyframe request was not handled", self.element.name);
                 }
             }
-            let i420 = gstreamer_layout(i420, self.size);
-            let buffer = (self.api.buffer_new_allocate)(null_mut(), i420.len(), null_mut());
-            ensure!(!buffer.is_null(), "GStreamer: no buffer");
-            let filled = (self.api.buffer_fill)(buffer, 0, i420.as_ptr().cast(), i420.len());
-            if filled != i420.len() {
-                (self.api.mini_object_unref)(buffer);
-                bail!("GStreamer: filled {filled} of {} bytes", i420.len());
-            }
-            let flow = (self.api.app_src_push_buffer)(self.source, buffer);
-            ensure!(flow == 0, "GStreamer push: flow {flow}");
-            self.pushed += 1;
-            let timeout = if self.pushed - self.pulled > MAX_IN_FLIGHT { OUTPUT_TIMEOUT } else { Duration::ZERO };
-            let sample = (self.api.app_sink_try_pull_sample)(self.sink, timeout.as_nanos() as u64);
-            self.check_bus()?;
-            if sample.is_null() {
-                return Ok(None);
-            }
-            self.pulled += 1;
-            let out = (self.api.sample_get_buffer)(sample);
-            let mut data = vec![0u8; (self.api.buffer_get_size)(out)];
-            let extracted = (self.api.buffer_extract)(out, 0, data.as_mut_ptr().cast(), data.len());
-            (self.api.mini_object_unref)(sample);
-            ensure!(extracted == data.len(), "GStreamer: extracted {extracted} of {} bytes", data.len());
-            Ok(Some(data))
         }
+        push(self.api, self.source, &gstreamer_layout(i420, self.size))?;
+        self.pushed += 1;
+        let timeout = if self.pushed - self.pulled > MAX_IN_FLIGHT { OUTPUT_TIMEOUT } else { Duration::ZERO };
+        let data = pull(self.api, self.sink, timeout)?;
+        self.check_bus()?;
+        self.pulled += data.is_some() as u64;
+        Ok(data)
     }
 }
 
@@ -436,6 +482,84 @@ impl VideoEncoder for GstreamerEncoder {
     }
 }
 
+/// The Jetson's hardware JPEG decoder: `nvjpegdec`, then `nvvidconv` to packed I420 (it takes JFIF's full range to the
+/// limited range zenoh-gateway's pictures are in). On the R1's Orin, under load 29, a 1920x1536 camera frame cost 9 ms
+/// of CPU this way against 16 with libjpeg-turbo. It failed on a 4:4:4 JPEG; the R1's cameras send 4:2:0.
+pub struct JpegDecoder {
+    api: &'static Api,
+    /// (pipeline, appsrc, appsink, the size it was made for)
+    pipeline: Option<(Pointer, Pointer, Pointer, (u32, u32))>,
+}
+
+// SAFETY: GStreamer objects are thread-safe; the decoder uses them one call at a time (`&mut self`)
+unsafe impl Send for JpegDecoder {}
+
+impl Drop for JpegDecoder {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl JpegDecoder {
+    /// The hardware decoder, if GStreamer has `nvjpegdec`.
+    pub fn hardware() -> Result<Self> {
+        let api = api()?;
+        // SAFETY: the factory reference is released at once
+        unsafe {
+            let factory = (api.element_factory_find)(c_string("nvjpegdec").as_ptr());
+            ensure!(!factory.is_null(), "GStreamer has no nvjpegdec");
+            (api.object_unref)(factory);
+        }
+        Ok(JpegDecoder { api, pipeline: None })
+    }
+
+    fn stop(&mut self) {
+        if let Some((pipeline, source, sink, _)) = self.pipeline.take() {
+            // SAFETY: our references, released once
+            unsafe {
+                (self.api.element_set_state)(pipeline, STATE_NULL);
+                for object in [source, sink, pipeline] {
+                    (self.api.object_unref)(object);
+                }
+            }
+        }
+    }
+
+    /// A `width x height` (both even) JPEG as packed I420, waiting for it (one pipeline per size).
+    pub fn decode(&mut self, jpeg: &[u8], (width, height): (u32, u32)) -> Result<Vec<u8>> {
+        if self.pipeline.is_none_or(|(_, _, _, size)| size != (width, height)) {
+            self.stop();
+            let description = format!("appsrc name=source is-live=true format=time caps=image/jpeg,width={width},height={height},framerate=0/1 ! jpegparse ! nvjpegdec ! nvvidconv ! video/x-raw,format=I420,width={width},height={height} ! appsink name=sink sync=false");
+            let (pipeline, source, sink) = launch(self.api, &description)?;
+            self.pipeline = Some((pipeline, source, sink, (width, height)));
+        }
+        let (pipeline, source, sink, _) = self.pipeline.expect("made above");
+        push(self.api, source, jpeg)?;
+        let data = pull(self.api, sink, OUTPUT_TIMEOUT)?;
+        check_bus(self.api, pipeline, "nvjpegdec")?;
+        let data = data.with_context(|| format!("nvjpegdec: no picture within {OUTPUT_TIMEOUT:?}"))?;
+        packed_i420(data, (width, height))
+    }
+}
+
+/// GStreamer's default I420 layout (rows padded to 4 bytes) as packed I420.
+fn packed_i420(data: Vec<u8>, (width, height): (u32, u32)) -> Result<Vec<u8>> {
+    let (width, height) = (width as usize, height as usize);
+    let (luma_stride, chroma_stride) = (width.next_multiple_of(4), (width / 2).next_multiple_of(4));
+    if data.len() == width * height * 3 / 2 {
+        return Ok(data);
+    }
+    ensure!(data.len() == luma_stride * height + chroma_stride * height, "nvjpegdec: {} bytes for a {width}x{height} I420 picture", data.len());
+    let mut out = Vec::with_capacity(width * height * 3 / 2);
+    let (luma, chroma) = data.split_at(luma_stride * height);
+    for (rows, row_len, stride) in [(luma, width, luma_stride), (chroma, width / 2, chroma_stride)] {
+        for row in rows.chunks_exact(stride) {
+            out.extend_from_slice(&row[..row_len]);
+        }
+    }
+    Ok(out)
+}
+
 /// `size` scaled up (shape kept, width a multiple of 16 and height even, as zenoh-gateway sizes them) to at least `min`.
 fn at_least((width, height): (u32, u32), (min_width, min_height): (u32, u32)) -> (u32, u32) {
     let scale = (min_width as f64 / width.max(1) as f64).max(min_height as f64 / height.max(1) as f64);
@@ -477,6 +601,14 @@ mod tests {
         assert!(has_idr(&[0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65, 0x88]), "SPS then an IDR slice");
         assert!(!has_idr(&[0, 0, 0, 1, 0x41, 0x9a]), "a non-IDR slice");
         assert!(!has_idr(&[]));
+    }
+
+    #[test]
+    fn padded_i420_unpacks() {
+        let packed: Vec<u8> = (0..(6 * 2 * 3 / 2) as u8).collect();
+        assert_eq!(packed_i420(gstreamer_layout(&packed, (6, 2)).into_owned(), (6, 2)).unwrap(), packed);
+        assert_eq!(packed_i420(packed.clone(), (6, 2)).unwrap(), packed, "already packed");
+        assert!(packed_i420(vec![0; 5], (6, 2)).is_err());
     }
 
     #[test]

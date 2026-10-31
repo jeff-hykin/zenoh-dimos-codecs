@@ -166,12 +166,23 @@ pub fn to_rgb(data: &[u8], hint: &str) -> Result<Rgb8> {
     }
 }
 
-/// A compressed image for the video path. A YCbCr JPEG with even sides is decoded to I420 without
+/// A compressed image for the video path. A JPEG the hardware decoder takes goes to it once the host enabled it
+/// ([`hardware_jpeg`](crate::hardware_jpeg)); else a YCbCr JPEG with even sides is decoded to I420 without
 /// ever becoming RGB: the encoder wants YUV anyway, and the YCbCr -> RGB -> YUV round trip was
 /// over half the decode on an ARM core (37 ms of a 1920x1536 frame on a Jetson Orin, against 16).
 /// Anything else decodes to RGB.
 pub fn to_video(data: &[u8], hint: &str) -> Result<VideoImage> {
-    if sniff_format(data, hint)? == FileFormat::Jpeg
+    let format = sniff_format(data, hint)?;
+    #[cfg(feature = "gstreamer")]
+    if format == FileFormat::Jpeg
+        && let Some(decoded) = crate::hardware_jpeg::decode(data)
+    {
+        match decoded {
+            Ok(image) => return Ok(image),
+            Err(error) => log::warn!("hardware jpeg decode: {error:#}: this one in software"),
+        }
+    }
+    if format == FileFormat::Jpeg
         && let Some(image) = jpeg::to_i420(data)?
     {
         return Ok(image);
