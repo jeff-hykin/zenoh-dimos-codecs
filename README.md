@@ -69,9 +69,11 @@ Inputs:
   wrong type is an error, counted in zenoh-gateway's `codecErrors` / `lastCodecError` stats).
 - mono16 is ambiguous (IR intensity or depth-like); the subscriber decides: `*_image` shows its top
   8 bits as gray video, `*_depth` delivers it losslessly with encoding `mono16`.
-- Decoders are pure Rust (zune-jpeg, png, image-webp, jxl-oxide). A YCbCr JPEG with
-  even sides decodes straight to I420 (full range → BT.601 limited), never through RGB; everything
-  else decodes to RGB8.
+- Decoders are pure Rust (zune-jpeg, png, image-webp, jxl-oxide), or libjpeg-turbo for JPEG with the
+  `turbojpeg` feature (vendored, statically linked; building needs cmake, and nasm on x86; ~2x faster
+  on a Jetson Orin, ~1.4x on an Apple M core). A YCbCr JPEG with even sides decodes straight to I420
+  (full range → BT.601 limited), never through RGB (with `turbojpeg`, from the JPEG's own planes, no
+  chroma upsampling); everything else decodes to RGB8.
 
 Depth stays lossless: quality only lowers resolution, by an integer stride `round(1 / (1/8 + 7/8 q))`
 (1 at q = 1, 2 at 0.5, 8 at 0), nearest neighbor (every value is a source value, never a blend).

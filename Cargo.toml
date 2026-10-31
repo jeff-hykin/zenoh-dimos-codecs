@@ -17,6 +17,9 @@ videotoolbox = []
 # encoders: GStreamer's hardware H.264 encoders, loaded at runtime (dlopen, so building needs no GStreamer): nvv4l2h264enc
 # (Jetson), nvh264enc (NVENC), vah264enc / vaapih264enc (VAAPI)
 gstreamer = ["dep:libloading"]
+# JPEG decoding with libjpeg-turbo (vendored C, built by cmake and linked statically; x86 needs nasm too) instead of
+# zune-jpeg: the video path gets the JPEG's own YCbCr planes, with no chroma upsampling to undo
+turbojpeg = ["dep:turbojpeg"]
 
 [dependencies]
 zenoh-gateway = "0.5.32"
@@ -25,6 +28,7 @@ anyhow = "1"
 serde_json = "1"
 # pure Rust decoders
 zune-jpeg = "0.5"
+turbojpeg = { version = "1.5", optional = true }
 png = "0.18"
 image-webp = "0.2"
 jxl-oxide = "0.12"
