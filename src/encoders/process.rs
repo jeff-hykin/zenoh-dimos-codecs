@@ -288,8 +288,9 @@ fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>>
     let DecodedFrame::Video(image) = frame else { bail!("a video encoder process encodes pictures, got {frame:?}") };
     // scaled here, the pipe carries the picture at the size it is encoded at: the R1's full-size 1920x1536 RGB (8.8 MB)
     // piped every frame cost the same at any size, so the gateway's CPU governor shrank it to the floor for nothing
+    // a JPEG goes as it is: the child's hardware pipeline decodes and scales it (or the child decodes it, as here)
     let scaled;
-    let image = if (image.width(), image.height()) == (target.width, target.height) {
+    let image = if image.jpeg_bytes().is_some() || (image.width(), image.height()) == (target.width, target.height) {
         image
     } else {
         scaled = image.to_i420(target.width, target.height)?;
@@ -302,14 +303,18 @@ fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>>
     bytes.extend_from_slice(&target.bitrate_bps.to_le_bytes());
     bytes.extend_from_slice(&target.fps.to_le_bytes());
     bytes.push(target.keyframe as u8);
-    bytes.push(match image.format() {
-        PixelFormat::Rgb8 => 0,
-        PixelFormat::I420 => 1,
-    });
+    let (pixel_format, data) = match image.jpeg_bytes() {
+        Some(jpeg) => (2, jpeg),
+        None => (match image.format() {
+            PixelFormat::Rgb8 => 0,
+            PixelFormat::I420 => 1,
+        }, image.data()),
+    };
+    bytes.push(pixel_format);
     bytes.extend_from_slice(&image.width().to_le_bytes());
     bytes.extend_from_slice(&image.height().to_le_bytes());
-    bytes.extend_from_slice(&(image.data().len() as u32).to_le_bytes());
-    bytes.extend_from_slice(image.data());
+    bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(data);
     Ok(bytes)
 }
 
@@ -330,6 +335,7 @@ fn read_request(input: &mut impl Read) -> Result<Option<(DecodedFrame, VideoTarg
     let image = match pixel_format {
         0 => VideoImage::rgb8(image_width, image_height, data)?,
         1 => VideoImage::i420(image_width, image_height, data)?,
+        2 => VideoImage::jpeg(image_width, image_height, data, crate::utils::compressed_image::decode_jpeg)?,
         other => bail!("unknown pixel format {other}"),
     };
     let mut target = VideoTarget::new(width, height, bitrate_bps, fps);
@@ -408,6 +414,13 @@ mod tests {
         let big = VideoImage::rgb8(8, 4, vec![200; 8 * 4 * 3]).unwrap();
         let (DecodedFrame::Video(sent), _) = read_request(&mut encode_request(&DecodedFrame::Video(big), &target).unwrap().as_slice()).unwrap().unwrap() else { panic!("a picture") };
         assert_eq!((sent.width(), sent.height(), sent.format()), (4, 2, PixelFormat::I420));
+        // a JPEG goes as it is, at its own size, and the child can still decode it
+        let jpeg = crate::utils::tests::fixture("compressed/pattern.jpeg");
+        let size = crate::utils::compressed_image::decode_jpeg(&jpeg).map(|image| (image.width(), image.height())).unwrap();
+        let still_jpeg = VideoImage::jpeg(size.0, size.1, jpeg.clone(), crate::utils::compressed_image::decode_jpeg).unwrap();
+        let (DecodedFrame::Video(sent), _) = read_request(&mut encode_request(&DecodedFrame::Video(still_jpeg), &target).unwrap().as_slice()).unwrap().unwrap() else { panic!("a picture") };
+        assert_eq!((sent.jpeg_bytes(), sent.width(), sent.height()), (Some(&jpeg[..]), size.0, size.1));
+        assert!(!sent.data().is_empty());
         assert!(read_request(&mut &request[..request.len() - 1]).is_err(), "a truncated picture");
         let mut unknown_format = request.clone();
         unknown_format[29] = 9;

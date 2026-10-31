@@ -166,12 +166,31 @@ pub fn to_rgb(data: &[u8], hint: &str) -> Result<Rgb8> {
     }
 }
 
-/// A compressed image for the video path. A JPEG the hardware decoder takes goes to it once the host enabled it
+/// A compressed image for the video path. Once the host enabled the hardware decoder, a JPEG it takes stays a JPEG
+/// ([`VideoImage::jpeg`]): the hardware encoder decodes, scales and encodes it in one pipeline, and anything that reads
+/// its pixels gets [`decode_video`]'s, made then. The rest are decoded now, by [`decode_video`].
+pub fn to_video(data: &[u8], hint: &str) -> Result<VideoImage> {
+    #[cfg(feature = "gstreamer")]
+    if crate::hardware_jpeg::enabled()
+        && sniff_format(data, hint)? == FileFormat::Jpeg
+        && let Some((width, height)) = crate::hardware_jpeg::hardware_size(data)
+    {
+        return VideoImage::jpeg(width, height, data.to_vec(), decode_jpeg);
+    }
+    decode_video(data, hint)
+}
+
+/// A JPEG's picture, for [`VideoImage::jpeg`].
+pub fn decode_jpeg(data: &[u8]) -> Result<VideoImage> {
+    decode_video(data, "jpeg")
+}
+
+/// A compressed image's picture. A JPEG the hardware decoder takes goes to it once the host enabled it
 /// ([`hardware_jpeg`](crate::hardware_jpeg)); else a YCbCr JPEG with even sides is decoded to I420 without
 /// ever becoming RGB: the encoder wants YUV anyway, and the YCbCr -> RGB -> YUV round trip was
 /// over half the decode on an ARM core (37 ms of a 1920x1536 frame on a Jetson Orin, against 16).
 /// Anything else decodes to RGB.
-pub fn to_video(data: &[u8], hint: &str) -> Result<VideoImage> {
+pub fn decode_video(data: &[u8], hint: &str) -> Result<VideoImage> {
     let format = sniff_format(data, hint)?;
     #[cfg(feature = "gstreamer")]
     if format == FileFormat::Jpeg

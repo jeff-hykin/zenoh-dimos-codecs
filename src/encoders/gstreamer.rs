@@ -174,6 +174,8 @@ static HARDWARE: [Element; 4] = [
 ];
 /// Software, for trying the pipeline on a machine without a hardware encoder.
 static X264: Element = Element { name: "x264enc", upload: "", kbps: true, settings: &[("tune", "zerolatency"), ("speed-preset", "ultrafast"), ("bframes", "0")], keyframe_interval: &["key-int-max"], min_size: (0, 0) };
+/// The encoder whose pipeline takes JPEG (the Jetson's: nvjpegdec and nvvidconv in front of it).
+const JPEG_ENCODER: &str = "nvv4l2h264enc";
 /// Frames inside the encoder before `encode` waits for one to come out: hardware encoders take a few frame times
 /// (nvv4l2h264enc ~40 ms on a loaded Orin), so waiting for each frame's own output capped a stream at ~25 fps.
 const MAX_IN_FLIGHT: u64 = 3;
@@ -283,6 +285,8 @@ struct Pipeline {
     encoder: Pointer,
     element: &'static Element,
     size: (u32, u32),
+    /// the JPEG size it decodes, for a pipeline that takes JPEG
+    jpeg: Option<(u32, u32)>,
     fps: f64,
     bitrate_bps: u32,
     pushed: u64,
@@ -305,14 +309,22 @@ impl Drop for Pipeline {
 }
 
 impl Pipeline {
-    fn new(api: &'static Api, element: &'static Element, (width, height): (u32, u32), bitrate_bps: u32, fps: f64) -> Result<Self> {
-        // colorimetry 2:4:5:1: limited range, BT.601 matrix, BT.709 transfer and primaries (zenoh-gateway's pictures)
-        let description = format!(
-            "appsrc name=source is-live=true do-timestamp=true format=time caps=video/x-raw,format=I420,width={width},height={height},framerate={}/1000,colorimetry=2:4:5:1 ! {} {} name=encoder ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=sink sync=false",
-            (fps * 1000.0).round().max(1.0) as u64,
-            element.upload,
-            element.name
-        );
+    fn new(api: &'static Api, element: &'static Element, (width, height): (u32, u32), jpeg: Option<(u32, u32)>, bitrate_bps: u32, fps: f64) -> Result<Self> {
+        let rate = (fps * 1000.0).round().max(1.0) as u64;
+        let description = match jpeg {
+            // decoded, scaled and encoded without leaving the GPU's memory (queues: each stage on its own thread); on the
+            // R1 under load 35 a 1920x1536 frame took 4 ms, against 26-60 decoded and scaled on the CPU and copied in
+            Some((jpeg_width, jpeg_height)) => format!(
+                "appsrc name=source is-live=true do-timestamp=true format=time caps=image/jpeg,width={jpeg_width},height={jpeg_height},framerate={rate}/1000 ! jpegparse ! queue ! nvjpegdec ! video/x-raw(memory:NVMM) ! queue ! nvvidconv ! video/x-raw(memory:NVMM),format=I420,width={width},height={height} ! queue ! {} name=encoder ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=sink sync=false",
+                element.name
+            ),
+            // colorimetry 2:4:5:1: limited range, BT.601 matrix, BT.709 transfer and primaries (zenoh-gateway's pictures)
+            None => format!(
+                "appsrc name=source is-live=true do-timestamp=true format=time caps=video/x-raw,format=I420,width={width},height={height},framerate={rate}/1000,colorimetry=2:4:5:1 ! {} {} name=encoder ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! appsink name=sink sync=false",
+                element.upload,
+                element.name
+            ),
+        };
         let mut error = null_mut();
         // SAFETY: plain GStreamer calls; every returned reference is owned by the Pipeline
         unsafe {
@@ -325,7 +337,7 @@ impl Pipeline {
                 bail!("GStreamer pipeline {description:?}: {message}");
             }
             let by_name = |name: &str| (api.bin_get_by_name)(pipeline, c_string(name).as_ptr());
-            let mut pipeline = Pipeline { api, pipeline, source: by_name("source"), sink: by_name("sink"), encoder: by_name("encoder"), element, size: (width, height), fps, bitrate_bps: 0, pushed: 0, pulled: 0 };
+            let mut pipeline = Pipeline { api, pipeline, source: by_name("source"), sink: by_name("sink"), encoder: by_name("encoder"), element, size: (width, height), jpeg, fps, bitrate_bps: 0, pushed: 0, pulled: 0 };
             ensure!(!pipeline.source.is_null() && !pipeline.sink.is_null() && !pipeline.encoder.is_null(), "GStreamer pipeline lost its elements");
             for (name, value) in element.settings {
                 pipeline.set(name, value);
@@ -364,9 +376,9 @@ impl Pipeline {
         check_bus(self.api, self.pipeline, self.element.name)
     }
 
-    /// Pushes one I420 picture and takes the oldest access unit out: at once if one is ready, waiting only once
-    /// `MAX_IN_FLIGHT` frames are inside (every access unit comes out, in order, one per call).
-    fn encode(&mut self, i420: &[u8], keyframe: bool) -> Result<Option<Vec<u8>>> {
+    /// Pushes one picture (I420 in GStreamer's layout, or a JPEG) and takes the oldest access unit out: at once if one is
+    /// ready, waiting only once `MAX_IN_FLIGHT` frames are inside (every access unit comes out, in order, one per call).
+    fn encode(&mut self, buffer: &[u8], keyframe: bool) -> Result<Option<Vec<u8>>> {
         // SAFETY: the event is handed over to appsrc
         unsafe {
             if keyframe {
@@ -376,7 +388,7 @@ impl Pipeline {
                 }
             }
         }
-        push(self.api, self.source, &gstreamer_layout(i420, self.size))?;
+        push(self.api, self.source, buffer)?;
         self.pushed += 1;
         let timeout = if self.pushed - self.pulled > MAX_IN_FLIGHT { OUTPUT_TIMEOUT } else { Duration::ZERO };
         let data = pull(self.api, self.sink, timeout)?;
@@ -468,16 +480,20 @@ impl VideoEncoder for GstreamerEncoder {
         let DecodedFrame::Video(image) = frame else { bail!("{} takes pictures, got {frame:?}", self.element.name) };
         let size = at_least((target.width, target.height), self.element.min_size);
         // encoders budget each frame from the caps' rate, so a rate that moves far rebuilds the pipeline
-        let fresh = self.pipeline.as_ref().is_none_or(|pipeline| pipeline.size != size || (pipeline.fps / target.fps).max(target.fps / pipeline.fps) > RECONFIGURE_RATIO);
+        // a JPEG the Jetson's decoder takes goes in as it is (see `Pipeline::new`)
+        let jpeg = image.jpeg_bytes().filter(|_| self.element.name == JPEG_ENCODER).and_then(|bytes| Some((bytes, crate::hardware_jpeg::hardware_size(bytes)?)));
+        let fresh = self.pipeline.as_ref().is_none_or(|pipeline| pipeline.size != size || pipeline.jpeg != jpeg.map(|(_, jpeg_size)| jpeg_size) || (pipeline.fps / target.fps).max(target.fps / pipeline.fps) > RECONFIGURE_RATIO);
         if fresh {
-            self.pipeline = Some(Pipeline::new(self.api, self.element, size, target.bitrate_bps, target.fps)?);
+            self.pipeline = Some(Pipeline::new(self.api, self.element, size, jpeg.map(|(_, jpeg_size)| jpeg_size), target.bitrate_bps, target.fps)?);
         }
         let pipeline = self.pipeline.as_mut().expect("created above");
         if pipeline.bitrate_bps != target.bitrate_bps {
             pipeline.set_bitrate(target.bitrate_bps);
         }
-        let i420 = image.to_i420(size.0, size.1)?;
-        let encoded = pipeline.encode(i420.data(), target.keyframe && !fresh)?;
+        let encoded = match jpeg {
+            Some((bytes, _)) => pipeline.encode(bytes, target.keyframe && !fresh)?,
+            None => pipeline.encode(&gstreamer_layout(image.to_i420(size.0, size.1)?.data(), size), target.keyframe && !fresh)?,
+        };
         Ok(encoded.map(|data| EncodedVideo { keyframe: has_idr(&data), data, width: size.0, height: size.1 }))
     }
 }
