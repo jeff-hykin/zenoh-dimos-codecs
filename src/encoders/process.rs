@@ -296,13 +296,7 @@ fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>>
         scaled = image.to_i420(target.width, target.height)?;
         &scaled
     };
-    let mut bytes = Vec::with_capacity(REQUEST_HEADER_BYTES + image.data().len());
-    bytes.extend_from_slice(&target.quality.to_le_bytes());
-    bytes.extend_from_slice(&target.width.to_le_bytes());
-    bytes.extend_from_slice(&target.height.to_le_bytes());
-    bytes.extend_from_slice(&target.bitrate_bps.to_le_bytes());
-    bytes.extend_from_slice(&target.fps.to_le_bytes());
-    bytes.push(target.keyframe as u8);
+    // (a JPEG's data() would decode it: what goes is its bytes)
     let (pixel_format, data) = match image.jpeg_bytes() {
         Some(jpeg) => (2, jpeg),
         None => (match image.format() {
@@ -310,6 +304,13 @@ fn encode_request(frame: &DecodedFrame, target: &VideoTarget) -> Result<Vec<u8>>
             PixelFormat::I420 => 1,
         }, image.data()),
     };
+    let mut bytes = Vec::with_capacity(REQUEST_HEADER_BYTES + data.len());
+    bytes.extend_from_slice(&target.quality.to_le_bytes());
+    bytes.extend_from_slice(&target.width.to_le_bytes());
+    bytes.extend_from_slice(&target.height.to_le_bytes());
+    bytes.extend_from_slice(&target.bitrate_bps.to_le_bytes());
+    bytes.extend_from_slice(&target.fps.to_le_bytes());
+    bytes.push(target.keyframe as u8);
     bytes.push(pixel_format);
     bytes.extend_from_slice(&image.width().to_le_bytes());
     bytes.extend_from_slice(&image.height().to_le_bytes());
@@ -417,9 +418,15 @@ mod tests {
         // a JPEG goes as it is, at its own size, and the child can still decode it
         let jpeg = crate::utils::tests::fixture("compressed/pattern.jpeg");
         let size = crate::utils::compressed_image::decode_jpeg(&jpeg).map(|image| (image.width(), image.height())).unwrap();
-        let still_jpeg = VideoImage::jpeg(size.0, size.1, jpeg.clone(), crate::utils::compressed_image::decode_jpeg).unwrap();
+        static DECODED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let counted = |bytes: &[u8]| {
+            DECODED.store(true, std::sync::atomic::Ordering::SeqCst);
+            crate::utils::compressed_image::decode_jpeg(bytes)
+        };
+        let still_jpeg = VideoImage::jpeg(size.0, size.1, jpeg.clone(), counted).unwrap();
         let (DecodedFrame::Video(sent), _) = read_request(&mut encode_request(&DecodedFrame::Video(still_jpeg), &target).unwrap().as_slice()).unwrap().unwrap() else { panic!("a picture") };
         assert_eq!((sent.jpeg_bytes(), sent.width(), sent.height()), (Some(&jpeg[..]), size.0, size.1));
+        assert!(!DECODED.load(std::sync::atomic::Ordering::SeqCst), "sending a JPEG never decodes it (it cost 30 ms a frame on the R1)");
         assert!(!sent.data().is_empty());
         assert!(read_request(&mut &request[..request.len() - 1]).is_err(), "a truncated picture");
         let mut unknown_format = request.clone();

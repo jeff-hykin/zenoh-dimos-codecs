@@ -171,7 +171,7 @@ pub fn to_rgb(data: &[u8], hint: &str) -> Result<Rgb8> {
 /// its pixels gets [`decode_video`]'s, made then. The rest are decoded now, by [`decode_video`].
 pub fn to_video(data: &[u8], hint: &str) -> Result<VideoImage> {
     #[cfg(feature = "gstreamer")]
-    if crate::hardware_jpeg::enabled()
+    if crate::hardware_jpeg::passthrough()
         && sniff_format(data, hint)? == FileFormat::Jpeg
         && let Some((width, height)) = crate::hardware_jpeg::hardware_size(data)
     {

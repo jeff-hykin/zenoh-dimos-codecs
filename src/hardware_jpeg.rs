@@ -11,7 +11,7 @@ use crate::encoders::process::ProcessConfig;
 use anyhow::{Context, Result, bail, ensure};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::sync::mpsc;
 use std::time::Instant;
@@ -32,15 +32,23 @@ const CHILDREN: usize = 4;
 
 /// The children [`enable`] started, each decoding one picture at a time.
 static DECODERS: OnceLock<Vec<Mutex<Decoder>>> = OnceLock::new();
+/// Set by [`enable`] where the hardware encoder takes JPEG: see [`passthrough`].
+static PASSTHROUGH: AtomicBool = AtomicBool::new(false);
 /// Where the next decode waits when every child is busy.
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-/// Starts the hardware JPEG decoder children as `config` says and checks each decodes a test JPEG; from then on the
-/// video path uses them. Fails (and the video path stays in software) where a child can't decode: no GStreamer, no
-/// `nvjpegdec`.
+/// Turns hardware JPEG decoding on for the video path. Where the Jetson's encoder is installed too, JPEGs go to it as they
+/// are ([`passthrough`]) and no decoder child is started: the R1's NVJPG engine opened only ~5 decoders at once, and four
+/// idle children left the encoder's own pipeline one. Elsewhere (an Orin Nano has nvjpegdec but no H.264 encoder) it
+/// starts the decoder children as `config` says and checks each decodes a test JPEG. Fails (and the video path stays in
+/// software) without GStreamer or `nvjpegdec`.
 pub fn enable(config: ProcessConfig) -> Result<()> {
     // (here first: without nvjpegdec, no child is started to find out)
     drop(JpegDecoder::hardware()?);
+    if crate::encoders::gstreamer::GstreamerEncoder::with_element(crate::encoders::gstreamer::JPEG_ENCODER).is_ok() {
+        PASSTHROUGH.store(true, Ordering::Relaxed);
+        return Ok(());
+    }
     let (jpeg, size) = probe_jpeg()?;
     let mut decoders: Vec<Decoder> = (0..CHILDREN).map(|_| Decoder { config: config.clone(), child: None, starts: 0 }).collect();
     for decoder in &mut decoders {
@@ -55,7 +63,14 @@ pub fn enable(config: ProcessConfig) -> Result<()> {
 
 /// Whether [`enable`] turned hardware decoding on.
 pub fn enabled() -> bool {
-    DECODERS.get().is_some()
+    passthrough() || DECODERS.get().is_some()
+}
+
+/// Whether the video path hands JPEGs the hardware decoder takes to the encoder as they are ([`zenoh_gateway::VideoImage::jpeg`]):
+/// nvv4l2h264enc's pipeline decodes, scales and encodes them on the GPU, and anything else that reads their pixels
+/// decodes them in software then.
+pub fn passthrough() -> bool {
+    PASSTHROUGH.load(Ordering::Relaxed)
 }
 
 /// `data` as I420 from the hardware decoder, if it is enabled and takes this JPEG (baseline, 3 components, 4:2:0, even

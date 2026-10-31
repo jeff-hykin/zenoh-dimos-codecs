@@ -175,10 +175,17 @@ static HARDWARE: [Element; 4] = [
 /// Software, for trying the pipeline on a machine without a hardware encoder.
 static X264: Element = Element { name: "x264enc", upload: "", kbps: true, settings: &[("tune", "zerolatency"), ("speed-preset", "ultrafast"), ("bframes", "0")], keyframe_interval: &["key-int-max"], min_size: (0, 0) };
 /// The encoder whose pipeline takes JPEG (the Jetson's: nvjpegdec and nvvidconv in front of it).
-const JPEG_ENCODER: &str = "nvv4l2h264enc";
+pub(crate) const JPEG_ENCODER: &str = "nvv4l2h264enc";
 /// Frames inside the encoder before `encode` waits for one to come out: hardware encoders take a few frame times
 /// (nvv4l2h264enc ~40 ms on a loaded Orin), so waiting for each frame's own output capped a stream at ~25 fps.
 const MAX_IN_FLIGHT: u64 = 3;
+/// The same for a pipeline that takes JPEG: its decoder, converter and encoder each hold frames (on the R1, ~40 ms from
+/// JPEG to H.264 idle, longer under load), and waiting for each output at 3 inside cost ~35 ms a frame, which zenoh-gateway's
+/// CPU governor took for encoding cost and shrank the picture for. `ZDC_GST_JPEG_IN_FLIGHT` overrides it.
+fn jpeg_in_flight() -> u64 {
+    static IN_FLIGHT: OnceLock<u64> = OnceLock::new();
+    *IN_FLIGHT.get_or_init(|| std::env::var("ZDC_GST_JPEG_IN_FLIGHT").ok().and_then(|value| value.parse().ok()).unwrap_or(6))
+}
 /// How long that wait may last (the first frame's includes the pipeline's start); under zenoh-gateway's default
 /// `encode_timeout` (5 s), so the encode fails here instead of being abandoned on its thread.
 const OUTPUT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -390,7 +397,8 @@ impl Pipeline {
         }
         push(self.api, self.source, buffer)?;
         self.pushed += 1;
-        let timeout = if self.pushed - self.pulled > MAX_IN_FLIGHT { OUTPUT_TIMEOUT } else { Duration::ZERO };
+        let in_flight = if self.jpeg.is_some() { jpeg_in_flight() } else { MAX_IN_FLIGHT };
+        let timeout = if self.pushed - self.pulled > in_flight { OUTPUT_TIMEOUT } else { Duration::ZERO };
         let data = pull(self.api, self.sink, timeout)?;
         self.check_bus()?;
         self.pulled += data.is_some() as u64;
