@@ -1,7 +1,7 @@
 //! JPEG decoding on the Jetson's hardware decoder ([`JpegDecoder`]), in a child process like
 //! [`encoders::process`](crate::encoders::process)'s encoder: one that hangs or crashes is killed and started again.
 //!
-//! The host turns it on with [`enable`] (it starts a child and checks it decodes a test JPEG); from then on the video path
+//! The host turns it on with [`enable`] (it starts the children and checks each decodes a test JPEG); from then on the video path
 //! ([`compressed_image::to_video`](crate::utils::compressed_image::to_video)) sends each baseline 4:2:0 JPEG with even
 //! sides here and gets I420 back, and decodes anything else, or anything the child fails, in software. The child is the
 //! host's program again with [`CHILD_ENV`] set: the host calls [`serve_if_child`] first thing in `main`.
@@ -11,6 +11,7 @@ use crate::encoders::process::ProcessConfig;
 use anyhow::{Context, Result, bail, ensure};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::sync::mpsc;
 use std::time::Instant;
@@ -24,37 +25,49 @@ const READY: &[u8] = b"\0zenoh-dimos-codecs jpeg decoder ready\0";
 /// The most a child may print to stdout before `READY`.
 const MAX_BEFORE_READY: usize = 64 * 1024;
 
-/// The decoder [`enable`] made, shared by every decode (one at a time: the hardware decodes one picture at a time).
-static DECODER: OnceLock<Mutex<Decoder>> = OnceLock::new();
+/// Children decoding side by side: zenoh-gateway decodes up to 4 frames of a stream ahead at once (its
+/// `MAX_DECODE_AHEAD`), and one pipeline's decode is mostly waiting, so they overlap (on the R1, 1920x1536 frames took
+/// 31 ms each through one pipeline, 16.5 with two at once, 9.6 with four); with one child they queued behind each other.
+const CHILDREN: usize = 4;
 
-/// Starts a hardware JPEG decoder child as `config` says and decodes a test JPEG with it; from then on the video path uses
-/// it. Fails (and the video path stays in software) where the child can't decode: no GStreamer, no `nvjpegdec`.
+/// The children [`enable`] started, each decoding one picture at a time.
+static DECODERS: OnceLock<Vec<Mutex<Decoder>>> = OnceLock::new();
+/// Where the next decode waits when every child is busy.
+static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// Starts the hardware JPEG decoder children as `config` says and checks each decodes a test JPEG; from then on the
+/// video path uses them. Fails (and the video path stays in software) where a child can't decode: no GStreamer, no
+/// `nvjpegdec`.
 pub fn enable(config: ProcessConfig) -> Result<()> {
     // (here first: without nvjpegdec, no child is started to find out)
     drop(JpegDecoder::hardware()?);
-    let mut decoder = Decoder { config, child: None, starts: 0 };
     let (jpeg, size) = probe_jpeg()?;
-    let started = Instant::now();
-    while decoder.child.as_ref().is_none_or(|child| !child.ready) {
-        ensure!(started.elapsed() < decoder.config.startup_timeout, "the jpeg decoder process did not start within {:?}", decoder.config.startup_timeout);
-        decoder.wait_ready()?;
+    let mut decoders: Vec<Decoder> = (0..CHILDREN).map(|_| Decoder { config: config.clone(), child: None, starts: 0 }).collect();
+    for decoder in &mut decoders {
+        decoder.start()?;
     }
-    let i420 = decoder.decode(&jpeg, size)?;
-    ensure!(i420.len() == (size.0 * size.1 * 3 / 2) as usize, "the jpeg decoder process returned {} bytes for {}x{}", i420.len(), size.0, size.1);
-    DECODER.set(Mutex::new(decoder)).map_err(|_| anyhow::anyhow!("the hardware jpeg decoder is already enabled"))
+    for decoder in &mut decoders {
+        let i420 = decoder.decode(&jpeg, size)?;
+        ensure!(i420.len() == (size.0 * size.1 * 3 / 2) as usize, "the jpeg decoder process returned {} bytes for {}x{}", i420.len(), size.0, size.1);
+    }
+    DECODERS.set(decoders.into_iter().map(Mutex::new).collect()).map_err(|_| anyhow::anyhow!("the hardware jpeg decoder is already enabled"))
 }
 
 /// Whether [`enable`] turned hardware decoding on.
 pub fn enabled() -> bool {
-    DECODER.get().is_some()
+    DECODERS.get().is_some()
 }
 
 /// `data` as I420 from the hardware decoder, if it is enabled and takes this JPEG (baseline, 3 components, 4:2:0, even
-/// sides); `Some(Err)` if it failed (the child is restarted for the next).
+/// sides); `Some(Err)` if it failed (the child is restarted for the next). Goes to a child that is free, else waits for one.
 pub fn decode(data: &[u8]) -> Option<Result<VideoImage>> {
-    let decoder = DECODER.get()?;
+    let decoders = DECODERS.get()?;
     let size = hardware_size(data)?;
-    Some(decoder.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).decode(data, size).and_then(|i420| VideoImage::i420(size.0, size.1, i420)))
+    let mut decoder = decoders.iter().find_map(|decoder| decoder.try_lock().ok()).unwrap_or_else(|| {
+        let waited = &decoders[NEXT.fetch_add(1, Ordering::Relaxed) % decoders.len()];
+        waited.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    });
+    Some(decoder.decode(data, size).and_then(|i420| VideoImage::i420(size.0, size.1, i420)))
 }
 
 /// A 64x64 mid-gray 4:2:0 JPEG and its size.
