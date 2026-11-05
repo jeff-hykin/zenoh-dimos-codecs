@@ -48,6 +48,7 @@ pub struct RawImage<'a> {
 /// A message's std_msgs/Header: what an encoding passes on to the page (the encoded output has no other header)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Header {
+    pub acquisition: Option<zenoh_gateway::AcquisitionHeader>,
     /// seconds since the epoch (`sec` + `nanosec` are exact)
     pub stamp: f64,
     pub sec: i32,
@@ -59,11 +60,11 @@ pub struct Header {
 
 impl Header {
     pub fn new(sec: i32, nanosec: u32, frame_id: String, seq: Option<u32>) -> Self {
-        Header { stamp: sec as f64 + nanosec as f64 * 1e-9, sec, nanosec, frame_id, seq }
+        Header { acquisition: None, stamp: sec as f64 + nanosec as f64 * 1e-9, sec, nanosec, frame_id, seq }
     }
     /// what the gateway sends with every message ([`MessageEncoding::header`](zenoh_gateway::MessageEncoding::header))
     pub fn to_gateway(&self) -> zenoh_gateway::MessageHeader {
-        zenoh_gateway::MessageHeader { sec: self.sec, nanosec: self.nanosec, frame_id: self.frame_id.clone(), seq: self.seq }
+        zenoh_gateway::MessageHeader { acquisition: self.acquisition.clone(), sec: self.sec, nanosec: self.nanosec, frame_id: self.frame_id.clone(), seq: self.seq }
     }
     /// `stamp` (s) and `frameId` added to an encoding's fields
     pub fn add_to(&self, fields: zenoh_gateway::Fields) -> zenoh_gateway::Fields {

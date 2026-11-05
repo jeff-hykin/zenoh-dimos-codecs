@@ -32,6 +32,27 @@ impl<'a> Lcm<'a> {
         Ok(i32::from_be_bytes(self.take(4)?.try_into()?))
     }
 
+    pub(crate) fn i64(&mut self) -> Result<i64> {
+        Ok(i64::from_be_bytes(self.take(8)?.try_into()?))
+    }
+
+    /// common_msgs.SampleHeader: clock, reset epoch, acquisition time, source, sequence, TF frame.
+    pub(crate) fn sample_header(&mut self) -> Result<crate::codecs::msgs::Header> {
+        let acquisition = zenoh_gateway::AcquisitionHeader {
+            clock_id: self.string()?, epoch: self.i64()?, time_ns: self.i64()?,
+            source_id: self.string()?, sequence: self.i64()?,
+        };
+        // The acquisition extension is authoritative; the legacy i32 seconds may not fit.
+        let mut header = crate::codecs::msgs::Header::new(
+            i32::try_from(acquisition.time_ns.div_euclid(1_000_000_000)).unwrap_or(0),
+            acquisition.time_ns.rem_euclid(1_000_000_000) as u32,
+            self.string()?, None,
+        );
+        header.stamp = acquisition.time_ns as f64 * 1e-9;
+        header.acquisition = Some(acquisition);
+        Ok(header)
+    }
+
     pub(crate) fn length(&mut self) -> Result<usize> {
         let value = self.i32()?;
         usize::try_from(value).context("negative LCM length")

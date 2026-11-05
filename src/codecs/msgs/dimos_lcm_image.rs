@@ -11,14 +11,18 @@ use zenoh_gateway::{Channel, DecodedFrame, EncodeOptions, EncodingOutput, Encodi
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_IMAGE: [u8; 8] = [0x53, 0x5c, 0xfa, 0xce, 0x1f, 0x4f, 0x57, 0x17];
 
+// Acquisition-stamped dimos-lcm schema; legacy fingerprints remain accepted.
+const LCM_IMAGE_ACQUISITION: [u8; 8] = [0x3b, 0x5f, 0xa3, 0x41, 0x4d, 0x59, 0x2a, 0xee];
+
 /// `dimos_lcm_image`
 pub struct DimosLcmImage;
 
 /// Parses the message, zero-copy over `payload`.
 pub fn parse(payload: &[u8]) -> Result<RawImage<'_>> {
-    let mut lcm = Lcm::new(payload, LCM_IMAGE, "sensor_msgs.Image")?;
+    let acquisition = payload.starts_with(&LCM_IMAGE_ACQUISITION);
+    let mut lcm = Lcm::new(payload, if acquisition { LCM_IMAGE_ACQUISITION } else { LCM_IMAGE }, "sensor_msgs.Image")?;
     let data_length = lcm.length()?;
-    let header = lcm.header()?;
+    let header = if acquisition { lcm.sample_header()? } else { lcm.header()? };
     let height = lcm.i32()? as u32;
     let width = lcm.i32()? as u32;
     let encoding = lcm.string()?;

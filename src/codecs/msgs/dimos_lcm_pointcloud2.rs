@@ -8,16 +8,20 @@ use zenoh_gateway::{MessageEncoding, Channel, EncodeOptions, EncodingOutput, Enc
 /// The LCM fingerprint of dimos-lcm's type, as `lcm-gen` computes it.
 const LCM_POINT_CLOUD2: [u8; 8] = [0xf5, 0xeb, 0x3d, 0xa1, 0xc2, 0x85, 0x31, 0x75];
 
+// Acquisition-stamped dimos-lcm schema; legacy fingerprints remain accepted.
+const LCM_POINT_CLOUD2_ACQUISITION: [u8; 8] = [0xdd, 0xed, 0xe6, 0x14, 0xf0, 0x8f, 0x05, 0x4c];
+
 /// `dimos_lcm_pointcloud2`
 pub struct DimosLcmPointCloud2;
 
 /// Parses the message, zero-copy over `payload`.
 pub fn parse(payload: &[u8]) -> Result<PointCloud<'_>> {
-    let mut lcm = Lcm::new(payload, LCM_POINT_CLOUD2, "sensor_msgs.PointCloud2")?;
+    let acquisition = payload.starts_with(&LCM_POINT_CLOUD2_ACQUISITION);
+    let mut lcm = Lcm::new(payload, if acquisition { LCM_POINT_CLOUD2_ACQUISITION } else { LCM_POINT_CLOUD2 }, "sensor_msgs.PointCloud2")?;
     let field_count = lcm.length()?;
     ensure!(field_count <= super::MAX_POINT_FIELDS, "PointCloud2 with {field_count} fields");
     let data_length = lcm.length()?;
-    let header = lcm.header()?;
+    let header = if acquisition { lcm.sample_header()? } else { lcm.header()? };
     let height = lcm.i32()? as u32;
     let width = lcm.i32()? as u32;
     let mut fields = Vec::with_capacity(field_count);
