@@ -160,3 +160,12 @@ cargo test && cargo clippy --all-targets   # parsers, decoders, encoders against
 `test/fixtures/` holds one payload per message (made by dimos's own encoder and by rosbags;
 `generate.py` rebuilds them, `manifest.json` describes them). zenoh-gateway-cli's `test/codecs.js` sends
 every fixture through every codec into headless Chrome.
+
+### Acquisition-stamped DimOS messages
+
+The image, depth and PointCloud2 codecs accept both the legacy `std_msgs.Header` schemas and
+the acquisition-stamped schemas (Image `3b5fa3414d592aee`, PointCloud2 `ddede614f08f054c`).
+They use the same H.264 / lossless depth / quantized cloud paths. The optional gateway
+`header.acquisition` preserves clock, reset epoch, nanosecond time, source and sequence;
+`header.frameId` preserves the TF frame. Simulation acquisition time is not wall-clock latency.
+The pinned gateway revision adds this metadata to both data and video delivery.

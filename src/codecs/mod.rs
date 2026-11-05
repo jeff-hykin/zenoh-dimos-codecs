@@ -39,6 +39,43 @@ mod tests {
     }
 
     #[test]
+    fn acquisition_samples_use_normal_codecs_and_keep_the_complete_header() {
+        for (name, file, source, frame_id) in [
+            ("dimos_lcm_image", "dimos/acquisition_image_rgb8.bin", "camera", "g1/camera"),
+            ("dimos_lcm_depth", "dimos/acquisition_depth_32FC1.bin", "camera", "g1/camera"),
+            ("dimos_lcm_pointcloud2", "dimos/acquisition_pointcloud_xyz.bin", "mid360", "world"),
+        ] {
+            let codec = all().into_iter().find(|codec| codec.name() == name).unwrap();
+            let payload = fixture(file);
+            let encoding = zenoh_gateway::zenoh::bytes::Encoding::default();
+            let sample = EncodingSample::new("k", &payload, &encoding);
+            let header = codec.header(&sample).unwrap();
+            assert_eq!(header.frame_id, frame_id);
+            assert_eq!(header.stamp(), 0.0, "zero simulation time is valid");
+            assert_eq!(header.acquisition, Some(zenoh_gateway::AcquisitionHeader {
+                clock_id: "sim-proof".into(), epoch: 3, time_ns: 0, source_id: source.into(), sequence: (1 << 60) + 7,
+            }));
+            if name == "dimos_lcm_image" {
+                let DecodedFrame::Video(image) = codec.decode(&sample, Channel::Video(VideoFormat::H264)).unwrap() else { panic!("video expected") };
+                assert_eq!(image.message_header(), Some(&header));
+                assert_eq!((image.width(), image.height()), (2, 1));
+            } else {
+                let decoded = codec.decode(&sample, Channel::Data).unwrap();
+                let encoded = codec.encode(&decoded, &EncodeOptions::quality(1.0)).unwrap();
+                let fields = zenoh_gateway::fields::parse(&encoded).unwrap();
+                if name == "dimos_lcm_depth" {
+                    assert_eq!(fields["data"].values(), [1.5, 2.5]);
+                } else {
+                    assert_eq!(fields["count"].values(), [2.0]);
+                }
+            }
+            for end in 0..payload.len() - 1 {
+                assert!(codec.header(&EncodingSample::new("k", &payload[..end], &encoding)).is_none(), "truncated {file} at {end}");
+            }
+        }
+    }
+
+    #[test]
     fn outputs_and_round_trips() {
         let names: Vec<_> = all().iter().map(|codec| (codec.name().to_owned(), codec.output())).collect();
         assert_eq!(names.len(), 12);

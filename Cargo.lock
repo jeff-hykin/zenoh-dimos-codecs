@@ -5188,8 +5188,7 @@ dependencies = [
 [[package]]
 name = "zenoh-gateway"
 version = "0.5.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdc5750c1da3b8942db7e11ef1c43282a1cb765f05c21ff94611f0f0fbb5f83c"
+source = "git+https://github.com/Nabla7/zenoh-gateway?rev=29e8e948924682317e8f40c13b7a0c3c05b406c5#29e8e948924682317e8f40c13b7a0c3c05b406c5"
 dependencies = [
  "anyhow",
  "async-trait",
